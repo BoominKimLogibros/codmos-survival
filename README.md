@@ -2,9 +2,9 @@
 
 Phaser 3 기반 생존 게임입니다. 게임 엔진, Spine 플러그인, 이미지, 오디오와 Spine 데이터는 모두 프로젝트 내부의 로컬 파일을 사용합니다.
 
-웹에서는 기존 싱글플레이를 제공하고 Electron 앱에서는 같은 LAN의 2~4명이 참여하는 UDP 협동 플레이를 추가로 제공합니다.
+웹에서는 기존 싱글플레이를 제공하고 Electron 앱에서는 같은 LAN에서 최대 20명이 참여하는 UDP 협동 플레이를 추가로 제공합니다.
 
-- 현재 버전: `1.1.0`
+- 현재 버전: `1.1.1`
 - 공식 사이트: [codmos.io](https://codmos.io)
 - 저작권: Copyright © 2026 Logibrothers. All rights reserved.
 
@@ -45,9 +45,9 @@ npm run dev:electron
 ```
 
 1. 각 컴퓨터에서 Electron 앱을 실행하고 메뉴에서 프로필을 선택합니다.
-2. `UDP 플레이`를 눌러 방 목록으로 이동합니다.
-3. 한 명이 방을 만들고 나머지 사용자가 같은 LAN에서 참여합니다.
-4. 2명 이상 모이면 방장이 게임을 시작할 수 있습니다. 최대 인원은 4명이며 진행 중 참여는 차단됩니다.
+2. `같이하기`를 눌러 방 목록으로 이동합니다.
+3. 한 명이 방을 만들면 방장은 혼자서도 즉시 게임을 시작할 수 있습니다.
+4. 나머지 사용자는 시작 전 로비 또는 진행 중인 게임에 바로 참여할 수 있습니다. 최대 인원은 20명입니다.
 
 방 검색은 UDP `41777` 포트를 사용하고 실제 세션은 운영체제가 할당한 UDP 포트를 사용합니다. OS 방화벽이 연결을 묻는 경우 같은 사설 네트워크에서의 수신을 허용해야 합니다. 웹 브라우저에서는 UDP 버튼이 비활성화되며 저장과 싱글플레이 기능은 그대로 유지됩니다.
 
@@ -80,7 +80,7 @@ npm run test:udp
 npm run smoke:electron
 ```
 
-`test:udp`는 4인 정원, 최고 레벨 기준 진행도, 진행 중 참여 차단, 방향 입력, 잘못된 토큰 폐기, 패킷 유실 재전송, 1,200바이트 초과 메시지 분할/재조립, 중복·역순 폐기와 이탈을 실제 로컬 UDP 소켓으로 검사합니다. `smoke:electron`은 숨김 Electron 창에서 context-isolated preload 브리지와 게임 캔버스, 활성화된 UDP 메뉴 버튼을 검사합니다.
+`test:udp`는 혼자 시작, 최대 20인 정원, 최고 레벨 기준 진행도, 진행 중 참여, 방향 입력, 잘못된 토큰 폐기, 패킷 유실 재전송, 1,200바이트 초과 메시지 분할/재조립, 중복·역순 폐기와 이탈을 실제 로컬 UDP 소켓으로 검사합니다. `smoke:electron`은 숨김 Electron 창에서 context-isolated preload 브리지와 게임 캔버스, 활성화된 UDP 메뉴 버튼을 검사합니다.
 
 ## 타입 검사
 
@@ -125,7 +125,7 @@ src/
     LevelUpScene.ts       레벨업 선택 UI
     GameOverScene.ts      결과 및 재시작 UI
     RoomListScene.ts      LAN 방 검색·생성·참여
-    RoomLobbyScene.ts     2~4인 대기실과 방장 시작
+    RoomLobbyScene.ts     최대 20인 대기실과 방장 시작
     MultiplayerGameScene.ts 방장 시뮬레이션/클라이언트 복제 조정
   services/
     profileService.ts     다중 프로필과 localStorage 영속화

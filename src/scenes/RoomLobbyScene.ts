@@ -68,6 +68,10 @@ export class RoomLobbyScene extends Phaser.Scene {
       this._enterGame(pendingStart);
       return;
     }
+    if (this.room.status === 'playing' && this.room.activeGame) {
+      this._enterGame({ room: this.room, ...this.room.activeGame });
+      return;
+    }
     if (this.room.status === 'waiting') void this._markLobbyReady();
   }
 
@@ -107,29 +111,46 @@ export class RoomLobbyScene extends Phaser.Scene {
         : !allReady
           ? `준비 ${readyCount}/${room.members.length} · ${waitingNames} 로비 복귀 대기`
           : room.isHost
-            ? '모든 참가자가 준비되었습니다. 게임을 시작할 수 있습니다.'
+            ? '게임을 시작할 수 있습니다. 시작 후에도 다른 플레이어가 참여할 수 있습니다.'
             : '모든 참가자 준비 완료 · 방장이 시작할 때까지 기다려 주세요.');
     this.memberLayer.removeAll(true);
+    const compact = room.members.length > 4;
+    const columns = compact ? 2 : 1;
+    const contentWidth = Math.min(680, width - 52);
+    const columnGap = compact ? 8 : 0;
+    const compactRowWidth = (contentWidth - columnGap) / 2;
     room.members.forEach((member, index) => {
-      const y = 138 + index * 78;
-      const rowWidth = Math.min(660, width - 72);
-      const panel = createUiPanel(this, width / 2, y, rowWidth, 64, {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const rowWidth = compact ? compactRowWidth : Math.min(660, width - 72);
+      const centerX = compact
+        ? width / 2 - contentWidth / 2 + rowWidth / 2 + column * (rowWidth + columnGap)
+        : width / 2;
+      const y = compact ? 130 + row * 37 : 138 + row * 78;
+      const rowHeight = compact ? 32 : 64;
+      const panel = createUiPanel(this, centerX, y, rowWidth, rowHeight, {
         fill: UI_COLORS.panelDark,
         border: member.playerId === room.localPlayerId ? UI_COLORS.primary : UI_COLORS.border,
         borderWidth: member.playerId === room.localPlayerId ? 2 : 1,
-        radius: 13,
+        radius: compact ? 9 : 13,
       });
       const skin = getSkinOption(member.skin);
-      const avatar = this.add.image(width / 2 - rowWidth / 2 + 42, y, skin.thumbnailKey).setDisplaySize(50, 50);
-      const name = this.add.text(width / 2 - rowWidth / 2 + 82, y - 11,
-        `${member.name}${member.isHost ? '  ·  방장' : ''}`, uiTextStyle({ fontSize: '16px', fontStyle: '800' }))
+      const left = centerX - rowWidth / 2;
+      const avatar = this.add.image(left + (compact ? 20 : 42), y, skin.thumbnailKey)
+        .setDisplaySize(compact ? 26 : 50, compact ? 26 : 50);
+      const name = this.add.text(left + (compact ? 39 : 82), y - (compact ? 8 : 11),
+        `${member.name}${member.isHost ? ' · 방장' : ''}`, uiTextStyle({
+          fontSize: compact ? '11px' : '16px', fontStyle: '800',
+        }))
         .setOrigin(0, 0.5);
-      const detail = this.add.text(width / 2 - rowWidth / 2 + 82, y + 13,
-        `Lv.${member.level} · ${skin.name}`, uiTextStyle({ fontSize: '11px', color: '#a7acb7', fontStyle: '600' }))
+      const detail = this.add.text(left + (compact ? 39 : 82), y + (compact ? 8 : 13),
+        `Lv.${member.level} · ${skin.name}`, uiTextStyle({
+          fontSize: compact ? '8px' : '11px', color: '#a7acb7', fontStyle: '600',
+        }))
         .setOrigin(0, 0.5);
       const stateLabel = this._memberStateLabel(member);
-      const state = this.add.text(width / 2 + rowWidth / 2 - 20, y, stateLabel, uiTextStyle({
-        fontSize: '12px',
+      const state = this.add.text(centerX + rowWidth / 2 - (compact ? 10 : 20), y, stateLabel, uiTextStyle({
+        fontSize: compact ? '8px' : '12px',
         color: isRoomMemberReady(member) ? '#ffffff' : '#a7acb7',
         fontStyle: '800',
       })).setOrigin(1, 0.5);

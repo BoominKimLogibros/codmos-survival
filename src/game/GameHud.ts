@@ -1,6 +1,6 @@
 import { MAX_VISIBLE_HP_GRID_CELLS } from '../config/constants';
 import { createUiButton, createUiPanel, createUiToast, UI_COLORS, uiTextStyle } from '../ui/theme';
-import { WeaponTooltip } from '../ui/WeaponTooltip';
+import { WeaponStatusHud } from '../ui/WeaponStatusHud';
 import type { UiButton, UiPanel, UiToast } from '../ui/theme';
 import type {
   PlayerStats,
@@ -36,13 +36,6 @@ interface HudLayout {
   dividerRight: number;
 }
 
-interface WeaponIconSlot {
-  key: WeaponKey;
-  background: UiPanel;
-  icon: Phaser.GameObjects.Image;
-  level: Phaser.GameObjects.Text;
-}
-
 /** Owns all gameplay HUD objects, responsive layout, toast, and exit modal. */
 export class GameHud {
   private layout: HudLayout;
@@ -59,8 +52,7 @@ export class GameHud {
   private readonly killsText: Phaser.GameObjects.Text;
   private readonly exitButton: UiButton;
   private readonly toast: UiToast;
-  private readonly weaponTooltip: WeaponTooltip;
-  private weaponIcons: WeaponIconSlot[] = [];
+  private readonly weaponStatusHud: WeaponStatusHud;
   private toastTween?: Phaser.Tweens.Tween;
   private exitModal?: Phaser.GameObjects.Container;
   private exitOverlay?: Phaser.GameObjects.Rectangle;
@@ -140,15 +132,17 @@ export class GameHud {
       width: Math.min(420, width - 30),
       fontSize: '15px',
     }).setScrollFactor(0).setDepth(1000);
-    this.weaponTooltip = new WeaponTooltip(scene);
+    this.weaponStatusHud = new WeaponStatusHud(scene, {
+      getWeaponKeys: () => this.options.getStats().weapons,
+      getWeapons: () => this.options.getWeapons(),
+      getWeaponTooltip: (key) => this.options.getWeaponTooltip(key),
+    });
 
     this.drawDividers();
     this.drawHpGrid();
-    this.refreshWeaponIcons();
     scene.scale.on('resize', this.handleResize, this);
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       scene.scale.off('resize', this.handleResize, this);
-      this.weaponTooltip.hide();
     });
   }
 
@@ -173,52 +167,7 @@ export class GameHud {
   }
 
   refreshWeaponIcons(): void {
-    this.weaponTooltip.hide();
-    this.weaponIcons.forEach(({ background, icon, level }) => {
-      background.destroy();
-      icon.destroy();
-      level.destroy();
-    });
-    this.weaponIcons = [];
-    const stats = this.options.getStats();
-    const definitions = this.options.getWeapons();
-    const startX = 16;
-    const startY = this.scene.scale.gameSize.height - 40;
-    stats.weapons.forEach((key, index) => {
-      const definition = definitions[key];
-      const x = startX + index * 48 + 20;
-      const background = createUiPanel(this.scene, x, startY, 42, 42, {
-        fill: UI_COLORS.panelDark,
-        border: UI_COLORS.border,
-        borderWidth: 2,
-        radius: 12,
-        shadow: true,
-        shadowOffset: 3,
-      }).setScrollFactor(0).setDepth(100);
-      background.setInteractive({
-        hitArea: new Phaser.Geom.Rectangle(-21, -21, 42, 42),
-        hitAreaCallback: Phaser.Geom.Rectangle.Contains,
-        useHandCursor: true,
-      });
-      background.on('pointerover', () => {
-        background.redrawUiPanel({ border: UI_COLORS.primary });
-        this.weaponTooltip.show(this.options.getWeaponTooltip(key), x, startY - 21);
-      });
-      background.on('pointerout', () => {
-        background.redrawUiPanel({ border: UI_COLORS.border });
-        this.weaponTooltip.hide();
-      });
-      const icon = this.scene.add.image(x, startY - 2, definition.icon)
-        .setScrollFactor(0)
-        .setDepth(101)
-        .setDisplaySize(26, 26);
-      const level = this.scene.add.text(x - 15, startY + 11, `Lv${definition.level}`, uiTextStyle({
-        fontSize: '8px',
-        color: '#d4d7de',
-        fontStyle: '800',
-      })).setScrollFactor(0).setDepth(102);
-      this.weaponIcons.push({ key, background, icon, level });
-    });
+    this.weaponStatusHud.refresh();
   }
 
   showToast(message: string, isError = false): void {
@@ -234,7 +183,7 @@ export class GameHud {
   }
 
   enterGameOverState(): void {
-    this.weaponTooltip.hide();
+    this.weaponStatusHud.hideTooltip();
     this.exitButton.setEnabled(false);
   }
 
@@ -272,7 +221,7 @@ export class GameHud {
 
   private openExitModal(): void {
     if (this.exitModal || !this.options.canOpenExit()) return;
-    this.weaponTooltip.hide();
+    this.weaponStatusHud.hideTooltip();
     this.options.onExitOpened();
     const { width, height } = this.scene.scale.gameSize;
     this.exitModal = this.scene.add.container(width / 2, height / 2)
@@ -324,7 +273,7 @@ export class GameHud {
   }
 
   private handleResize(gameSize: Phaser.Structs.Size): void {
-    this.weaponTooltip.hide();
+    this.weaponStatusHud.hideTooltip();
     const { width, height } = gameSize;
     this.layout = this.calculateLayout(width);
     const hud = this.layout;
@@ -347,13 +296,6 @@ export class GameHud {
     this.drawHpGrid();
     this.update();
 
-    const startY = height - 40;
-    this.weaponIcons.forEach(({ background, icon, level }, index) => {
-      const x = 16 + index * 48 + 20;
-      background.setPosition(x, startY);
-      icon.setPosition(x, startY - 2);
-      level.setPosition(x - 15, startY + 11);
-    });
   }
 
   private drawDividers(): void {

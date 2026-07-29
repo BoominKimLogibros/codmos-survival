@@ -66,11 +66,6 @@ export class HostRuneCoordinator {
     const charges = this.getShieldCharges(playerId);
     if (charges <= 0) return false;
     this.shieldCharges.set(playerId, charges - 1);
-    const player = this.players.get(playerId);
-    if (player) {
-      const flash = this.scene.add.circle(player.sprite.x, player.sprite.y, 54, UI_COLORS.white, 0.25).setDepth(30);
-      this.scene.tweens.add({ targets: flash, alpha: 0, scale: 1.2, duration: 160, onComplete: () => flash.destroy() });
-    }
     this.audio.effects.spring.play();
     return true;
   }

@@ -118,6 +118,10 @@ export class EnemySystem {
   private hitFeedbackCount = 0;
   private deathEffectWindowAt = 0;
   private deathEffectCount = 0;
+  private readonly connectedPlayers = new WeakSet<PlayerController>();
+  private readonly connectedWeapons = new WeakSet<WeaponSystem>();
+  private environmentEnemiesConnected = false;
+  private waterEnemiesConnected = false;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -142,7 +146,9 @@ export class EnemySystem {
   ): void {
     const players = this.players();
     const weaponSystems = Array.isArray(weapons) ? weapons : [weapons];
-    players.forEach((player) => {
+    const newPlayers = players.filter((player) => !this.connectedPlayers.has(player));
+    const newWeaponSystems = weaponSystems.filter((weapon) => !this.connectedWeapons.has(weapon));
+    newPlayers.forEach((player) => {
       this.scene.physics.add.overlap(
         player.sprite,
         this.enemies,
@@ -158,8 +164,9 @@ export class EnemySystem {
         this.healthOrbs,
         (_player, orb) => this.onHealthCollected(player, orb as DropSprite),
       );
+      this.connectedPlayers.add(player);
     });
-    weaponSystems.forEach((weaponSystem) => {
+    newWeaponSystems.forEach((weaponSystem) => {
       this.scene.physics.add.overlap(
         weaponSystem.projectiles,
         this.enemies,
@@ -173,21 +180,28 @@ export class EnemySystem {
         this.enemies,
         (hitbox, enemy) => this.onMeleeHit(hitbox as DamageSprite, enemy as EnemySprite),
       );
+      this.connectedWeapons.add(weaponSystem);
     });
 
     if (environmentColliders) {
-      players.forEach((player) => this.scene.physics.add.collider(player.sprite, environmentColliders));
-      this.scene.physics.add.collider(this.enemies, environmentColliders);
-      weaponSystems.forEach((weaponSystem) => {
+      newPlayers.forEach((player) => this.scene.physics.add.collider(player.sprite, environmentColliders));
+      if (!this.environmentEnemiesConnected) {
+        this.scene.physics.add.collider(this.enemies, environmentColliders);
+        this.environmentEnemiesConnected = true;
+      }
+      newWeaponSystems.forEach((weaponSystem) => {
         this.scene.physics.add.collider(weaponSystem.projectiles, environmentColliders, (projectile) => {
           (projectile as Phaser.GameObjects.GameObject).destroy();
         });
       });
     }
     if (waterLayer) {
-      players.forEach((player) => this.scene.physics.add.collider(player.sprite, waterLayer));
-      this.scene.physics.add.collider(this.enemies, waterLayer);
-      weaponSystems.forEach((weaponSystem) => {
+      newPlayers.forEach((player) => this.scene.physics.add.collider(player.sprite, waterLayer));
+      if (!this.waterEnemiesConnected) {
+        this.scene.physics.add.collider(this.enemies, waterLayer);
+        this.waterEnemiesConnected = true;
+      }
+      newWeaponSystems.forEach((weaponSystem) => {
         this.scene.physics.add.collider(weaponSystem.projectiles, waterLayer, (projectile) => {
           (projectile as Phaser.GameObjects.GameObject).destroy();
         });

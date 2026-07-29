@@ -6,6 +6,7 @@ import {
   isPointInExplosionBounds,
   selectVisibleExplosionTargets,
 } from '../src/game/ExplosionTargeting';
+import { isCombatEffectPayload } from '../src/network/gameProtocol';
 
 const bounds = createPlayerViewportBounds(0, 0, 800, 600, 2048, 88);
 assert.deepEqual(bounds, { left: -312, right: 312, top: -212, bottom: 212 });
@@ -27,4 +28,19 @@ const fallback = fallbackExplosionPoint(edgeBounds, { x: 1000, y: 900 }, 0, 1, t
 assert.equal(isPointInExplosionBounds(fallback, edgeBounds), true);
 assert.equal(EXPLOSION_FUSE_DURATION_MS, 1000);
 
-console.log('Explosion smoke test passed: visible bounds, clustered target, offscreen rejection, 1s fuse');
+const networkEffect = {
+  type: 'explosion',
+  startX: 10,
+  startY: 20,
+  x: 140,
+  y: 160,
+  radius: 72,
+  flightDurationMs: 500,
+  fuseDurationMs: 1000,
+};
+assert.equal(isCombatEffectPayload(networkEffect), true);
+assert.equal(isCombatEffectPayload({ ...networkEffect, x: Number.NaN }), false);
+assert.equal(isCombatEffectPayload({ ...networkEffect, radius: 0 }), false);
+assert.equal(isCombatEffectPayload({ type: 'explosion' }), false);
+
+console.log('Explosion smoke test passed: visible bounds, clustered target, offscreen rejection, 1s fuse, UDP payload validation');

@@ -5,9 +5,9 @@ export const UDP_DISCOVERY_PORT = 41777;
 // while multicast loopback lets two Electron processes discover each other on
 // the same computer (unicast packets on a shared UDP port are not fanned out).
 export const UDP_DISCOVERY_MULTICAST_ADDRESS = '239.255.42.99';
-export const UDP_PROTOCOL_VERSION = 4;
-export const UDP_MAX_PLAYERS = 4;
-export const UDP_MIN_PLAYERS = 2;
+export const UDP_PROTOCOL_VERSION = 6;
+export const UDP_MAX_PLAYERS = 20;
+export const UDP_MIN_PLAYERS = 1;
 
 export type RoomStatus = 'waiting' | 'playing';
 export type MemberConnection = 'connected' | 'reconnecting' | 'left';
@@ -57,6 +57,10 @@ export interface RoomState {
   localPlayerId: string;
   isHost: boolean;
   members: RoomMember[];
+  activeGame?: {
+    baselinePlayerId: string;
+    startedAt: number;
+  };
   privateProfiles?: Record<string, NetworkProfile>;
 }
 

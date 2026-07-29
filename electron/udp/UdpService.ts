@@ -115,6 +115,10 @@ interface PublicRoomState {
   status: 'waiting' | 'playing';
   hostPlayerId: string;
   members: RoomMember[];
+  activeGame?: {
+    baselinePlayerId: string;
+    startedAt: number;
+  };
 }
 
 interface Peer {
@@ -334,7 +338,6 @@ export class UdpService {
       request.room.port > 65535
     ) throw new Error('방 또는 프로필 정보가 올바르지 않습니다.');
     await this.leaveRoom('replace-session');
-    if (request.room.status !== 'waiting') throw new Error('이미 시작된 방입니다.');
     await this.ensureSessionSocket();
     const nonce = randomUUID();
     const target = { address: request.room.address, port: request.room.port };
@@ -391,6 +394,12 @@ export class UdpService {
         const state = this.getRoomState();
         if (!state) return false;
         this.emit({ type: 'room-state', room: state });
+        if (state.status === 'playing' && state.activeGame) {
+          this.emit({
+            type: 'game-start',
+            data: { room: state, ...state.activeGame },
+          });
+        }
         resolve(state);
         return true;
       };
@@ -451,9 +460,11 @@ export class UdpService {
       if (bTime !== aTime) return bTime - aTime;
       return a.joinOrder - b.joinOrder;
     })[0];
-    const hostState = this.getRoomState();
-    if (!hostState || !baseline) throw new Error('게임 시작 정보를 만들 수 없습니다.');
+    if (!baseline) throw new Error('게임 시작 정보를 만들 수 없습니다.');
     const startedAt = Date.now() + 500;
+    session.room.activeGame = { baselinePlayerId: baseline.playerId, startedAt };
+    const hostState = this.getRoomState();
+    if (!hostState) throw new Error('게임 시작 정보를 만들 수 없습니다.');
     const publicPayload = {
       room: this.publicRoomStateForClient(),
       baselinePlayerId: baseline.playerId,
@@ -479,6 +490,7 @@ export class UdpService {
       member.alive = true;
     }
     session.room.status = 'waiting';
+    delete session.room.activeGame;
     session.room.members.forEach((member) => {
       if (member.presence === 'playing') member.presence = 'results';
     });
@@ -798,7 +810,9 @@ export class UdpService {
       nonce: packet.nonce,
       reason,
     }, rinfo);
-    if (session.room.status !== 'waiting') return reject('이미 게임이 시작되었습니다.');
+    if (session.room.status === 'playing' && !session.room.activeGame) {
+      return reject('게임 참여 정보를 준비하고 있습니다. 잠시 후 다시 시도해 주세요.');
+    }
     if (session.room.members.length >= UDP_MAX_PLAYERS) return reject('방 정원이 가득 찼습니다.');
     if (!isValidNetworkProfile(packet.profile)) return reject('프로필 정보가 올바르지 않습니다.');
 
@@ -815,7 +829,14 @@ export class UdpService {
       lastSequences: new Map(),
     };
     session.peers.set(playerId, peer);
-    session.room.members.push(publicMember(playerId, packet.profile, false, session.room.members.length));
+    const joinOrder = Math.max(-1, ...session.room.members.map((member) => member.joinOrder)) + 1;
+    const member = publicMember(playerId, packet.profile, false, joinOrder);
+    if (session.room.status === 'playing') {
+      member.presence = 'playing';
+      member.hp = member.hp > 0 ? member.hp : member.maxHp;
+      member.alive = true;
+    }
+    session.room.members.push(member);
     this.sendJoinAccept(peer, packet.nonce);
     this.broadcastLobbyState();
     const state = this.getRoomState();

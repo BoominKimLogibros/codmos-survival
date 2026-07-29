@@ -154,19 +154,19 @@ export class MenuScene extends Phaser.Scene {
 
     const actionWidth = Math.min(250, (width - 48) / 2);
     const actionOffset = actionWidth / 2 + 7;
-    this.startButton = createUiButton(this, width / 2 - actionOffset, height - 42, '프로필로 시작하기', {
+    this.startButton = createUiButton(this, width / 2 - actionOffset, height - 42, '혼자하기', {
       width: actionWidth, height: 50, fill: UI_COLORS.primary, border: UI_COLORS.primary,
       color: '#ffffff', fontSize: width < 580 ? '15px' : '19px',
     });
     this.startButton.on('pointerdown', () => this._startSelectedProfile());
-    this.udpButton = createUiButton(this, width / 2 + actionOffset, height - 42, 'UDP 플레이', {
+    this.udpButton = createUiButton(this, width / 2 + actionOffset, height - 42, '같이하기', {
       width: actionWidth, height: 50, fill: UI_COLORS.surfaceRaised, border: UI_COLORS.border,
       color: '#ffffff', fontSize: '16px',
     });
     this.udpButton.uiLabel.setPosition(0, -9);
     this.udpButton.on('pointerdown', () => this._startUdp());
     this.udpHint = this.add.text(0, 12,
-      '(같은 네트워크 2~4명)',
+      '(같은 네트워크 · 최대 20명)',
       uiTextStyle({ fontSize: '9px', color: '#a7acb7', fontStyle: '600' }),
     ).setOrigin(0.5);
     this.udpButton.add(this.udpHint);

@@ -46,6 +46,23 @@ export interface CombatEffectPayload {
   fuseDurationMs: number;
 }
 
+export function isCombatEffectPayload(value: unknown): value is CombatEffectPayload {
+  if (!value || typeof value !== 'object') return false;
+  const effect = value as Partial<CombatEffectPayload>;
+  return effect.type === 'explosion' && [
+    effect.startX,
+    effect.startY,
+    effect.x,
+    effect.y,
+    effect.radius,
+    effect.flightDurationMs,
+    effect.fuseDurationMs,
+  ].every((item) => typeof item === 'number' && Number.isFinite(item)) &&
+    effect.radius! > 0 &&
+    effect.flightDurationMs! >= 0 &&
+    effect.fuseDurationMs! >= 0;
+}
+
 export interface NetObjectState {
   id: string;
   texture: string;

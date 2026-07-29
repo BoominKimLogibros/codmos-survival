@@ -2,11 +2,14 @@ import { PlayerController } from '../game/PlayerController';
 import type { PlayerStats } from '../game/types';
 import { ExplosionPresentation } from '../objects/ExplosionPresentation';
 import { updateAuraPresentation } from '../objects/AuraPresentation';
+import { BossPresentation } from '../objects/BossPresentation';
 import { MultiAttackPresentation } from '../objects/MultiAttackPresentation';
+import { PlayerStatusPresentation } from '../objects/PlayerStatusPresentation';
 import { ReviveMarker } from '../objects/ReviveMarker';
+import { ShieldPresentation } from '../objects/ShieldPresentation';
 import { UI_COLORS, uiTextStyle } from '../ui/theme';
+import { isCombatEffectPayload } from './gameProtocol';
 import type {
-  CombatEffectPayload,
   NetEnemyState,
   NetAuraState,
   NetObjectState,
@@ -18,8 +21,9 @@ import type {
 
 interface PlayerView {
   controller: PlayerController;
-  label: Phaser.GameObjects.Text;
+  status: PlayerStatusPresentation;
   shield: Phaser.GameObjects.Text;
+  shieldPresentation: ShieldPresentation | null;
   target?: NetPlayerState;
   targetAt: number;
   defeated: boolean;
@@ -28,6 +32,7 @@ interface PlayerView {
 
 interface EnemyView {
   sprite: Phaser.GameObjects.Sprite;
+  presentation: BossPresentation | null;
   hpBg: Phaser.GameObjects.Rectangle;
   hpBar: Phaser.GameObjects.Rectangle;
   target: NetEnemyState;
@@ -77,6 +82,9 @@ export class ClientWorldRenderer {
   get progress(): typeof this.latestProgress { return this.latestProgress; }
   get localPlayer(): PlayerController | undefined { return this.players.get(this.localPlayerId)?.controller; }
   get localAlive(): boolean { return this.latestPlayers.find((player) => player.id === this.localPlayerId)?.alive ?? true; }
+  get bossStates(): NetEnemyState[] {
+    return [...this.canonicalEnemies.values()].filter((enemy) => enemy.type === 'boss');
+  }
 
   apply(snapshot: WorldSnapshot): void {
     this.latestProgress = snapshot.progress;
@@ -84,11 +92,16 @@ export class ClientWorldRenderer {
     snapshot.players.forEach((state) => this.queuePlayer(state));
 
     if (snapshot.keyframe) {
-      this.removeAbsent(this.canonicalEnemies, snapshot.enemies.map((item) => item.id), (id) => this.destroyEnemy(id));
+      const removedEnemyIds = new Set(snapshot.removedEnemies);
+      this.removeAbsent(
+        this.canonicalEnemies,
+        snapshot.enemies.map((item) => item.id),
+        (id) => this.destroyEnemy(id, removedEnemyIds.has(id)),
+      );
       this.removeAbsent(this.canonicalObjects, snapshot.objects.map((item) => item.id), (id) => this.destroyObject(id));
       this.removeAbsent(this.canonicalRunes, snapshot.runes.map((item) => item.id), (id) => this.destroyRune(id));
     }
-    snapshot.removedEnemies.forEach((id) => this.destroyEnemy(id));
+    snapshot.removedEnemies.forEach((id) => this.destroyEnemy(id, true));
     snapshot.removedObjects.forEach((id) => this.destroyObject(id));
     snapshot.removedRunes.forEach((id) => this.destroyRune(id));
     snapshot.enemies.forEach((state) => { this.canonicalEnemies.set(state.id, state); this.upsertEnemy(state); });
@@ -132,9 +145,10 @@ export class ClientWorldRenderer {
         const y = error > 180 ? targetY : Phaser.Math.Linear(view.controller.sprite.y, targetY, fastBlend);
         view.controller.applyNetworkState(x, y, state.vx, state.vy);
       }
-      view.label.setPosition(view.controller.sprite.x, view.controller.sprite.y - 54);
+      view.status.setPosition(view.controller.sprite.x, view.controller.sprite.y - 49);
       view.shield.setPosition(view.controller.sprite.x + 30, view.controller.sprite.y - 34)
         .setText(state.shield > 0 ? `방어 ${state.shield}` : '').setVisible(state.shield > 0);
+      view.shieldPresentation?.setPosition(view.controller.sprite.x, view.controller.sprite.y);
       this.auras.get(id)?.sprite.setPosition(view.controller.sprite.x, view.controller.sprite.y);
     }
     this.auras.forEach((aura) => {
@@ -148,6 +162,7 @@ export class ClientWorldRenderer {
       view.sprite.x = Phaser.Math.Linear(view.sprite.x, targetX, fastBlend);
       view.sprite.y = Phaser.Math.Linear(view.sprite.y, targetY, fastBlend);
       view.sprite.setFlipX(state.vx < 0);
+      view.presentation?.sync(view.sprite.x, view.sprite.y, state.vx < 0);
       const visible = this.inCamera(view.sprite.x, view.sprite.y, CLIENT_RENDER_MARGIN);
       view.sprite.setVisible(visible);
       view.hpBg.setVisible(visible);
@@ -179,28 +194,24 @@ export class ClientWorldRenderer {
     });
   }
 
-  playCombatEffect(effect: CombatEffectPayload, onImpact?: () => void): void {
-    if (effect.type !== 'explosion') return;
-    if ([
-      effect.startX,
-      effect.startY,
-      effect.x,
-      effect.y,
-      effect.radius,
-      effect.flightDurationMs,
-      effect.fuseDurationMs,
-    ]
-      .every(Number.isFinite)) return;
+  playCombatEffect(effect: unknown, onImpact?: () => void): void {
+    if (!isCombatEffectPayload(effect)) return;
     ExplosionPresentation.play(this.scene, effect, onImpact);
   }
 
   destroy(): void {
     this.players.forEach((view) => {
       view.controller.sprite.destroy();
-      view.label.destroy();
+      view.status.destroy();
       view.shield.destroy();
+      view.shieldPresentation?.destroy(false);
     });
-    this.enemies.forEach((view) => { view.sprite.destroy(); view.hpBg.destroy(); view.hpBar.destroy(); });
+    this.enemies.forEach((view) => {
+      view.presentation?.destroy(false);
+      view.sprite.destroy();
+      view.hpBg.destroy();
+      view.hpBar.destroy();
+    });
     this.objects.forEach((view) => view.sprite.destroy());
     this.runes.forEach((rune) => {
       rune.sprite.destroy();
@@ -224,18 +235,23 @@ export class ClientWorldRenderer {
         cameraFollow: state.id === this.localPlayerId,
         cameraLerp: state.id === this.localPlayerId ? 0.24 : undefined,
       });
-      const label = this.scene.add.text(state.x, state.y - 54, state.name, uiTextStyle({
-        fontSize: '11px', color: '#ffffff', fontStyle: '800',
-        stroke: '#0b0d12', strokeThickness: 2,
-      })).setOrigin(0.5).setDepth(20);
+      const status = new PlayerStatusPresentation(this.scene, state.x, state.y - 49, {
+        name: state.name,
+        level: state.level,
+        hp: state.hp,
+        maxHp: state.maxHp,
+        xp: state.xp,
+        xpToNext: state.xpToNext,
+      });
       const shield = this.scene.add.text(state.x + 30, state.y - 34, '', uiTextStyle({
         fontSize: '9px', color: '#d4d7de', fontStyle: '800',
         stroke: '#0b0d12', strokeThickness: 2,
       })).setOrigin(0.5).setDepth(20);
       view = {
         controller,
-        label,
+        status,
         shield,
+        shieldPresentation: null,
         targetAt: performance.now(),
         defeated: false,
         hitRevision: state.hitRevision,
@@ -252,19 +268,52 @@ export class ClientWorldRenderer {
       xp: state.xp,
       xpToNext: state.xpToNext,
     } satisfies Partial<PlayerStats>);
+    view.status.update({
+      name: state.name,
+      level: state.level,
+      hp: state.hp,
+      maxHp: state.maxHp,
+      xp: state.xp,
+      xpToNext: state.xpToNext,
+      status: !state.connected ? '재연결' : !state.alive ? '유령' : undefined,
+    });
     if (state.alive && state.hitRevision > view.hitRevision) {
       view.controller.showDamageFeedback();
     }
     view.hitRevision = Math.max(view.hitRevision, state.hitRevision);
+    this.syncShieldPresentation(view, state);
     if (!state.alive && !view.defeated) {
       view.defeated = true;
       view.controller.enterDefeatedState();
-      view.label.setAlpha(0.5).setText(`${state.name} · 유령`);
     } else if (state.alive && view.defeated) {
       view.defeated = false;
       view.controller.reviveAt(state.x, state.y, state.hp);
-      view.label.setAlpha(1).setText(state.name);
     }
+  }
+
+  private syncShieldPresentation(view: PlayerView, state: NetPlayerState): void {
+    if (state.alive && state.shield > 0) {
+      if (!view.shieldPresentation) {
+        view.shieldPresentation = new ShieldPresentation(
+          this.scene,
+          view.controller.sprite.x,
+          view.controller.sprite.y,
+          state.shield,
+        );
+      } else {
+        view.shieldPresentation.sync(
+          view.controller.sprite.x,
+          view.controller.sprite.y,
+          state.shield,
+        );
+      }
+      return;
+    }
+    if (!view.shieldPresentation) return;
+    const depleted = state.alive && view.shieldPresentation.charges > 0 && state.shield === 0;
+    view.shieldPresentation.sync(view.controller.sprite.x, view.controller.sprite.y, state.shield);
+    view.shieldPresentation.destroy(depleted);
+    view.shieldPresentation = null;
   }
 
   private syncAuras(states: NetAuraState[]): void {
@@ -312,11 +361,20 @@ export class ClientWorldRenderer {
     if (!view) {
       const sprite = this.scene.add.sprite(state.x, state.y, 'monsterSheet', state.frame)
         .setScale(state.scale).setDepth(4);
-      this.restoreEnemyTint(sprite, state.type);
+      const presentation = state.type === 'boss'
+        ? BossPresentation.create(this.scene, state.x, state.y, Math.max(1, state.bossTier))
+        : null;
+      if (presentation) {
+        // Keep the Arcade-compatible sprite as an invisible network/HP anchor.
+        sprite.setAlpha(0).setDisplaySize(presentation.visualHeight, presentation.visualHeight);
+      } else {
+        this.restoreEnemyTint(sprite, state.type);
+      }
       const hpBg = this.scene.add.rectangle(state.x, state.y, 40, 6, UI_COLORS.panelDeep).setDepth(25);
       const hpBar = this.scene.add.rectangle(state.x, state.y, 40, 4, UI_COLORS.primary).setOrigin(0, 0.5).setDepth(26);
       view = {
         sprite,
+        presentation,
         hpBg,
         hpBar,
         target: state,
@@ -331,10 +389,20 @@ export class ClientWorldRenderer {
     }
     view.target = state;
     view.targetAt = performance.now();
-    view.sprite.setFrame(state.frame).setScale(state.scale);
+    view.sprite.setFrame(state.frame);
+    if (view.presentation) {
+      view.sprite.setAlpha(0).setDisplaySize(view.presentation.visualHeight, view.presentation.visualHeight);
+      view.presentation.sync(state.x, state.y, state.vx < 0);
+    } else {
+      view.sprite.setAlpha(1).setScale(state.scale);
+    }
   }
 
   private showEnemyHitFeedback(view: EnemyView, type: NetEnemyState['type'], revision: number): void {
+    if (view.presentation) {
+      view.presentation.showDamageFeedback();
+      return;
+    }
     const sprite = view.sprite as Phaser.GameObjects.Sprite & {
       setTintFill?: (color: number) => Phaser.GameObjects.Sprite;
     };
@@ -395,8 +463,9 @@ export class ClientWorldRenderer {
       y >= view.y - margin && y <= view.bottom + margin;
   }
 
-  private destroyEnemy(id: string): void {
+  private destroyEnemy(id: string, playDeathAnimation = false): void {
     const view = this.enemies.get(id);
+    view?.presentation?.destroy(playDeathAnimation);
     view?.sprite.destroy(); view?.hpBg.destroy(); view?.hpBar.destroy();
     this.enemies.delete(id); this.canonicalEnemies.delete(id);
   }

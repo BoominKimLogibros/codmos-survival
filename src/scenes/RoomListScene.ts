@@ -109,11 +109,12 @@ export class RoomListScene extends Phaser.Scene {
       const detail = this.add.text(
         width / 2 - rowWidth / 2 + 18,
         y + 12,
-        `${room.hostName} · 기준 Lv.${room.hostLevel} · ${room.playerCount}/${room.maxPlayers}명 · ${room.ping}ms`,
+        `${room.hostName} · 기준 Lv.${room.hostLevel} · ${room.playerCount}/${room.maxPlayers}명 · ${room.ping}ms${room.status === 'playing' ? ' · 진행 중' : ''}`,
         uiTextStyle({ fontSize: '11px', color: '#a7acb7', fontStyle: '600' }),
       ).setOrigin(0, 0.5);
-      const canJoin = room.status === 'waiting' && room.playerCount < room.maxPlayers;
-      const join = createUiButton(this, width / 2 + rowWidth / 2 - 62, y, canJoin ? '참여' : '진행 중', {
+      const canJoin = room.playerCount < room.maxPlayers;
+      const joinLabel = room.status === 'playing' ? '바로 참여' : '참여';
+      const join = createUiButton(this, width / 2 + rowWidth / 2 - 62, y, canJoin ? joinLabel : '정원 마감', {
         width: 94, height: 36,
         fill: UI_COLORS.surfaceRaised, border: UI_COLORS.border, fontSize: '13px',
       }).setEnabled(canJoin);
@@ -131,7 +132,7 @@ export class RoomListScene extends Phaser.Scene {
       this.scene.start('RoomLobbyScene', { profileId: this.profileId });
     } catch (error) {
       this.transitionBusy = false;
-      button.setEnabled(true).setLabel('참여');
+      button.setEnabled(true).setLabel(room.status === 'playing' ? '바로 참여' : '참여');
       this._showToast(error instanceof Error ? error.message : '방에 참여하지 못했습니다.', true);
     }
   }

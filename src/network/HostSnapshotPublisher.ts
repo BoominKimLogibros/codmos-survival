@@ -50,7 +50,9 @@ export class HostSnapshotPublisher {
     this.tick++;
     const now = Date.now();
     const includeWorld = this.tick % HOST_SNAPSHOT_LIMITS.worldEveryTicks === 1;
-    for (const member of this.members()) {
+    const members = this.members();
+    const activeMemberCount = members.filter((member) => member.connection !== 'left').length;
+    for (const member of members) {
       if (member.isHost || member.connection === 'left') continue;
       const target = this.players.get(member.playerId);
       if (!target) continue;
@@ -58,7 +60,7 @@ export class HostSnapshotPublisher {
         now - (this.cache(member.playerId).lastKeyframeAt || 0) >= 2_000;
       this.send(
         member.playerId,
-        this.buildSnapshot(member.playerId, target, keyframe, includeWorld, now),
+        this.buildSnapshot(member.playerId, target, keyframe, includeWorld, now, activeMemberCount),
       );
     }
   }
@@ -96,6 +98,7 @@ export class HostSnapshotPublisher {
     keyframe: boolean,
     includeWorld: boolean,
     now: number,
+    activeMemberCount: number,
   ): WorldSnapshot {
     const inRange = (x: number, y: number) => Phaser.Math.Distance.Squared(x, y, target.sprite.x, target.sprite.y)
       <= HOST_SNAPSHOT_LIMITS.interestRadius * HOST_SNAPSHOT_LIMITS.interestRadius;
@@ -105,13 +108,24 @@ export class HostSnapshotPublisher {
       target.sprite.x,
       target.sprite.y,
     );
+    // Keep 20-player rooms within a practical host upload budget while player
+    // movement itself remains at the full snapshot rate. Nearby entities are
+    // prioritized and bosses are always retained.
+    const entityScale = activeMemberCount <= 4
+      ? 1
+      : Math.max(0.4, 4 / activeMemberCount);
+    const enemyLimit = Math.max(80, Math.floor(HOST_SNAPSHOT_LIMITS.enemies * entityScale));
+    const objectLimit = Math.max(48, Math.floor(HOST_SNAPSHOT_LIMITS.objects * entityScale));
     const enemies = includeWorld
       ? this.enemySystem.getActiveEnemies()
-        .filter((enemy) => inRange(enemy.x, enemy.y))
+        // Boss direction markers must remain available even when the boss is
+        // outside a client's normal entity interest radius.
+        .filter((enemy) => enemy.enemyType === 'boss' || inRange(enemy.x, enemy.y))
         .sort((left, right) => (
+          Number(right.enemyType === 'boss') - Number(left.enemyType === 'boss') ||
           distanceToTarget(left.x, left.y) - distanceToTarget(right.x, right.y)
         ))
-        .slice(0, HOST_SNAPSHOT_LIMITS.enemies)
+        .slice(0, enemyLimit)
         .map((enemy) => this.enemyState(enemy))
       : [];
     const objects: NetObjectState[] = [];
@@ -133,7 +147,7 @@ export class HostSnapshotPublisher {
       objects.sort((left, right) => (
         distanceToTarget(left.x, left.y) - distanceToTarget(right.x, right.y)
       ));
-      objects.length = Math.min(objects.length, HOST_SNAPSHOT_LIMITS.objects);
+      objects.length = Math.min(objects.length, objectLimit);
     }
     const runes = includeWorld
       ? this.runes.snapshot().filter((rune) => inRange(rune.x, rune.y))

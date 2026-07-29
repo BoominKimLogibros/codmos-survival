@@ -5,8 +5,13 @@ import {
   getLanBroadcastAddresses,
 } from '../electron/udp/networkTargets';
 import { createInitialAdaptiveDifficultyState, type GameSaveState } from '../src/game/types';
-import { UDP_PROTOCOL_VERSION, type UdpBridgeEvent } from '../src/network/types';
+import { UDP_MAX_PLAYERS, UDP_PROTOCOL_VERSION, type UdpBridgeEvent } from '../src/network/types';
 import { HOST_SNAPSHOT_LIMITS } from '../src/network/HostSnapshotPublisher';
+import {
+  formatOffscreenPlayerGroup,
+  groupOffscreenIndicators,
+  projectOffscreenTarget,
+} from '../src/ui/OffscreenIndicatorHud';
 
 assert.equal(calculateDirectedBroadcastAddress('172.30.1.76', '255.255.255.0'), '172.30.1.255');
 assert.equal(calculateDirectedBroadcastAddress('10.23.45.67', '255.255.0.0'), '10.23.255.255');
@@ -17,10 +22,37 @@ assert.deepEqual(getLanBroadcastAddresses({
   lo0: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: true }],
 }), ['10.0.7.255', '172.30.1.255']);
 
+const indicatorWorld = { left: -400, right: 400, top: -300, bottom: 300 };
+assert.equal(projectOffscreenTarget(0, 0, indicatorWorld, 800, 600), null);
+assert.deepEqual(projectOffscreenTarget(900, 0, indicatorWorld, 800, 600), {
+  x: 740, y: 300, angle: 0,
+});
+const upperIndicator = projectOffscreenTarget(0, -900, indicatorWorld, 800, 600);
+assert.equal(upperIndicator?.x, 400);
+assert.equal(upperIndicator?.y, 42);
+assert.ok((upperIndicator?.angle ?? 0) < 0);
+assert.equal(formatOffscreenPlayerGroup(['민수', '지수']), '민수, 지수');
+assert.equal(formatOffscreenPlayerGroup(['민수', '지수', '하늘']), '민수 외 2명');
+const groupedIndicators = groupOffscreenIndicators([
+  {
+    target: { id: 'player:1', kind: 'player', label: '민수', x: 900, y: 0, active: true },
+    projection: { x: 740, y: 200, angle: 0 },
+  },
+  {
+    target: { id: 'player:2', kind: 'player', label: '지수', x: 900, y: 10, active: true },
+    projection: { x: 740, y: 218, angle: 0 },
+  },
+  {
+    target: { id: 'boss:1', kind: 'boss', label: 'BOSS', x: 900, y: 10, active: true },
+    projection: { x: 740, y: 218, angle: 0 },
+  },
+], 800);
+assert.equal(groupedIndicators.length, 2);
+assert.equal(groupedIndicators.find(({ target }) => target.kind === 'player')?.target.label, '민수, 지수');
 const budgetSnapshot = {
   serverTime: Date.now(), tick: 1, keyframe: true,
   progress: { gameTime: 1_000_000, killCount: 1_000_000, normalGeneration: 1000, bossGeneration: 1000 },
-  players: Array.from({ length: 4 }, (_, index) => ({
+  players: Array.from({ length: UDP_MAX_PLAYERS }, (_, index) => ({
     id: `player-${index}-${'x'.repeat(20)}`, name: `Player ${index}`, skin: 'basic',
     x: 1024, y: 1024, vx: 200, vy: 200, hp: 100000, maxHp: 100000,
     speed: 10000, level: 1000000, xp: 1000000000, xpToNext: 1000000000,
@@ -83,13 +115,25 @@ const hostEvents: UdpBridgeEvent[] = [];
 const clientEvents: UdpBridgeEvent[] = [];
 const clientTwoEvents: UdpBridgeEvent[] = [];
 const clientThreeEvents: UdpBridgeEvent[] = [];
+const lateClientEvents: UdpBridgeEvent[] = [];
 const host = new UdpService((event) => hostEvents.push(event));
 const client = new UdpService((event) => clientEvents.push(event));
 const clientTwo = new UdpService((event) => clientTwoEvents.push(event));
 const clientThree = new UdpService((event) => clientThreeEvents.push(event));
-const rejectedClient = new UdpService(() => undefined);
+const rejectedClient = new UdpService((event) => lateClientEvents.push(event));
+const soloHost = new UdpService(() => undefined);
 
 try {
+  const soloRoom = await soloHost.createRoom({
+    name: 'Solo Start Room',
+    profile: { profileId: 'solo-host-profile', name: 'Solo Host', skin: 'basic', state },
+  });
+  const soloStarted = soloHost.startGame();
+  assert.equal(soloStarted.room.roomId, soloRoom.roomId);
+  assert.equal(soloStarted.room.members.length, 1);
+  assert.equal(soloStarted.room.status, 'playing');
+  await soloHost.leaveRoom('solo-test-complete');
+
   const hostRoom = await host.createRoom({
     name: 'Smoke Room',
     profile: { profileId: 'host-profile', name: 'Host', skin: 'basic', state },
@@ -119,10 +163,24 @@ try {
     profile: { profileId: 'client-three-profile', name: 'Client Three', skin: 'basic', state },
   });
   assert.equal(host.getRoomState()?.members.length, 4);
+  assert.equal(room!.maxPlayers, UDP_MAX_PLAYERS);
+  const capacityRoom = (host as unknown as {
+    session: { room: { members: NonNullable<ReturnType<UdpService['getRoomState']>>['members'] } };
+  }).session.room;
+  const realMemberCount = capacityRoom.members.length;
+  const capacityFillers = Array.from({ length: UDP_MAX_PLAYERS - realMemberCount }, (_, index) => ({
+    ...capacityRoom.members[0],
+    playerId: `capacity-filler-${index}`,
+    name: `Capacity ${index}`,
+    isHost: false,
+    joinOrder: realMemberCount + index,
+  }));
+  capacityRoom.members.push(...capacityFillers);
   await assert.rejects(() => rejectedClient.joinRoom({
     room: room!,
     profile: { profileId: 'rejected', name: 'Too Late', skin: 'basic', state },
   }), /정원이 가득/);
+  capacityRoom.members.splice(realMemberCount, capacityFillers.length);
 
   const started = host.startGame();
   assert.equal(started.baselinePlayerId, clientTwo.getRoomState()?.localPlayerId);
@@ -203,10 +261,15 @@ try {
   await waitFor(hostEvents, (event) => (
     event.type === 'game-message' && event.message.kind === 'member-left'
   ));
-  await assert.rejects(() => rejectedClient.joinRoom({
-    room: { ...room!, playerCount: 3 },
+  const lateRoom = await rejectedClient.joinRoom({
+    room: { ...room!, status: 'playing', playerCount: 3 },
     profile: { profileId: 'late', name: 'Late Join', skin: 'basic', state },
-  }), /이미 게임이 시작/);
+  });
+  assert.equal(lateRoom.status, 'playing');
+  assert.equal(lateRoom.members.find((member) => member.playerId === lateRoom.localPlayerId)?.presence, 'playing');
+  assert.ok(lateRoom.activeGame);
+  await waitFor(lateClientEvents, (event) => event.type === 'game-start');
+  assert.equal(host.getRoomState()?.members.length, 4);
 
   const replayState: GameSaveState = {
     ...state,
@@ -228,6 +291,7 @@ try {
   assert.throws(() => host.startGame(), /로비에서 준비되지 않았/);
   await client.setMemberPresence('lobby');
   await clientTwo.setMemberPresence('lobby');
+  await rejectedClient.setMemberPresence('lobby');
   await waitFor(hostEvents, (event) => (
     event.type === 'room-state' && event.room.members.every((member) => member.presence === 'lobby')
   ));
@@ -274,12 +338,13 @@ try {
       && event.message.kind === 'member-left'
       && (event.message.payload as { playerId: string }).playerId === clientPlayerId
   ));
-  assert.equal(host.getRoomState()?.members.length, 2);
-  console.log('UDP smoke test passed: local discovery, capacity, readiness, input, auth, retry, snapshot budget, malformed chunks, order, leave');
+  assert.equal(host.getRoomState()?.members.length, 3);
+  console.log('UDP smoke test passed: solo start, late join, local discovery, capacity, readiness, input, auth, retry, snapshot budget, malformed chunks, order, leave');
 } finally {
   host.dispose();
   client.dispose();
   clientTwo.dispose();
   clientThree.dispose();
   rejectedClient.dispose();
+  soloHost.dispose();
 }

@@ -1,4 +1,4 @@
-import { PLAYER_SKIN, RETRY_BOSS_DELAY_MS } from '../config/constants';
+import { PLAYER_SKIN, RETRY_BOSS_DELAY_MS, WORLD_SIZE } from '../config/constants';
 import { AudioManager } from '../game/AudioManager';
 import { DeathCameraController } from '../game/DeathCameraController';
 import { EnemySystem } from '../game/EnemySystem';
@@ -7,11 +7,17 @@ import { PlayerController } from '../game/PlayerController';
 import { advanceOneLevelIfReady } from '../game/progression';
 import type { GameSaveState, LevelUpChoice, RunProgress } from '../game/types';
 import { createInitialRunProgress } from '../game/types';
-import { WeaponSystem } from '../game/WeaponSystem';
+import {
+  applyWeaponDefinitionLevels,
+  buildWeaponTooltipData,
+  createWeaponDefinitions,
+  WeaponSystem,
+} from '../game/WeaponSystem';
 import { ClientWorldRenderer } from '../network/ClientWorldRenderer';
 import type {
   CombatEffectPayload,
   LevelOfferPayload,
+  NetPlayerState,
   PlayerCheckpointPayload,
   RuneChallengePayload,
   WorldSnapshot,
@@ -21,14 +27,26 @@ import { HostReviveCoordinator } from '../network/HostReviveCoordinator';
 import { HostSnapshotPublisher } from '../network/HostSnapshotPublisher';
 import { NetworkInputSource } from '../network/NetworkInputSource';
 import { udpClient } from '../network/UdpClient';
-import type { GameStartPayload, RoomMember, RoomState, UdpBridgeEvent, UdpGameMessage } from '../network/types';
+import type {
+  GameStartPayload,
+  NetworkProfile,
+  RoomMember,
+  RoomState,
+  UdpBridgeEvent,
+  UdpGameMessage,
+} from '../network/types';
 import { WorldMap } from '../objects/WorldMap';
+import { PlayerStatusPresentation } from '../objects/PlayerStatusPresentation';
+import { ShieldPresentation } from '../objects/ShieldPresentation';
 import { getProfile, updateProfileState } from '../services/profileService';
 import { MultiplayerLevelOverlay } from '../ui/MultiplayerLevelOverlay';
 import { MultiplayerRuneOverlay } from '../ui/MultiplayerRuneOverlay';
+import { OffscreenIndicatorHud } from '../ui/OffscreenIndicatorHud';
+import type { OffscreenIndicatorTarget } from '../ui/OffscreenIndicatorHud';
 import { PartyHud } from '../ui/PartyHud';
 import { createUiButton, createUiPanel, createUiToast, UI_COLORS, uiTextStyle } from '../ui/theme';
 import type { UiToast } from '../ui/theme';
+import { WeaponStatusHud } from '../ui/WeaponStatusHud';
 
 interface MultiplayerSceneData {
   profileId?: string;
@@ -47,6 +65,25 @@ function uniqueId(prefix: string): string {
     : `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function initialPlayerSpawn(
+  center: { x: number; y: number },
+  index: number,
+  total: number,
+): { x: number; y: number } {
+  if (index === 0) return { ...center };
+  const playersPerRing = 8;
+  const ring = Math.floor((index - 1) / playersPerRing);
+  const slot = (index - 1) % playersPerRing;
+  const ringCount = Math.min(playersPerRing, total - 1 - ring * playersPerRing);
+  const angle = (slot / Math.max(1, ringCount)) * Math.PI * 2 - Math.PI / 2;
+  const radius = 76 + ring * 58;
+  const boundary = WORLD_SIZE / 2 - 64;
+  return {
+    x: Phaser.Math.Clamp(center.x + Math.cos(angle) * radius, -boundary, boundary),
+    y: Phaser.Math.Clamp(center.y + Math.sin(angle) * radius, -boundary, boundary),
+  };
+}
+
 export class MultiplayerGameScene extends Phaser.Scene {
   private profileId = '';
   private startData!: GameStartPayload;
@@ -58,19 +95,25 @@ export class MultiplayerGameScene extends Phaser.Scene {
   private inputSource!: NetworkInputSource;
   private deathCamera!: DeathCameraController;
   private partyHud!: PartyHud;
+  private offscreenIndicatorHud!: OffscreenIndicatorHud;
+  private skillHud?: WeaponStatusHud;
   private toast!: UiToast;
   private levelOverlay!: MultiplayerLevelOverlay;
   private runeOverlay!: MultiplayerRuneOverlay;
   private unsubscribe?: () => void;
   private localWasAlive = true;
+  private localSkillState?: GameSaveState;
+  private localSkillDefinitions = createWeaponDefinitions();
+  private localSkillSignature = '';
 
   private progress: RunProgress = createInitialRunProgress();
   private readonly hostPlayers = new Map<string, PlayerController>();
   private readonly hostInputs = new Map<string, number>();
   private readonly playerIds = new Map<PlayerController, string>();
   private readonly hostWeapons = new Map<string, WeaponSystem>();
-  private readonly playerLabels = new Map<string, Phaser.GameObjects.Text>();
+  private readonly playerStatusViews = new Map<string, PlayerStatusPresentation>();
   private readonly shieldLabels = new Map<string, Phaser.GameObjects.Text>();
+  private readonly hostShieldPresentations = new Map<string, ShieldPresentation>();
   private readonly pendingOffers = new Map<string, PendingOffer>();
   private enemySystem?: EnemySystem;
   private runeCoordinator?: HostRuneCoordinator;
@@ -99,19 +142,26 @@ export class MultiplayerGameScene extends Phaser.Scene {
     this.hostInputs.clear();
     this.playerIds.clear();
     this.hostWeapons.clear();
-    this.playerLabels.clear();
+    this.playerStatusViews.clear();
     this.shieldLabels.clear();
+    this.hostShieldPresentations.clear();
     this.pendingOffers.clear();
     this.enemySystem = undefined;
     this.runeCoordinator = undefined;
     this.reviveCoordinator = undefined;
     this.publisher = undefined;
     this.clientRenderer = undefined;
+    this.skillHud = undefined;
+    this.localSkillState = undefined;
+    this.localSkillDefinitions = createWeaponDefinitions();
+    this.localSkillSignature = '';
     this.snapshotElapsed = 0;
     this.checkpointElapsed = 0;
     this.timeElapsed = 0;
     this.roomResetPromise = undefined;
     this.leaving = false;
+    const localProfile = getProfile(this.profileId);
+    if (localProfile) this.syncLocalSkills(localProfile.state);
     this.worldMap = new WorldMap(this);
     this.audio = new AudioManager(this);
     this.deathCamera = new DeathCameraController(this);
@@ -120,6 +170,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
       this.isHost ? undefined : (mask) => udpClient.sendInput(mask),
     );
     this.partyHud = new PartyHud(this);
+    this.offscreenIndicatorHud = new OffscreenIndicatorHud(this);
     this.toast = createUiToast(this, this.scale.gameSize.width / 2, this.scale.gameSize.height - 96, {
       width: Math.min(460, this.scale.gameSize.width - 32),
     }).setScrollFactor(0).setDepth(4500);
@@ -138,12 +189,17 @@ export class MultiplayerGameScene extends Phaser.Scene {
       this.inputSource.stop();
       this.clientRenderer?.destroy();
       this.reviveCoordinator?.destroy();
+      this.playerStatusViews.forEach((presentation) => presentation.destroy());
+      this.playerStatusViews.clear();
+      this.hostShieldPresentations.forEach((presentation) => presentation.destroy(false));
+      this.hostShieldPresentations.clear();
       this.pendingOffers.forEach((offer) => offer.timer.remove(false));
       this.pendingOffers.clear();
     });
 
     if (this.isHost) this.createHostWorld();
     else this.createClientWorld();
+    this.createSkillHud();
   }
 
   update(_time: number, delta: number): void {
@@ -174,11 +230,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
     members.forEach((member, index) => {
       const profile = profiles[member.playerId];
       if (!profile) return;
-      const angle = (index / Math.max(1, members.length)) * Math.PI * 2;
-      const spawn = {
-        x: center.x + Math.cos(angle) * (index === 0 ? 0 : 72),
-        y: center.y + Math.sin(angle) * (index === 0 ? 0 : 72),
-      };
+      const spawn = initialPlayerSpawn(center, index, members.length);
       this.hostInputs.set(member.playerId, 0);
       const player = new PlayerController(this, {
         skin: profile.skin || PLAYER_SKIN,
@@ -190,13 +242,18 @@ export class MultiplayerGameScene extends Phaser.Scene {
       player.applySavedState(profile.state.stats, spawn);
       this.hostPlayers.set(member.playerId, player);
       this.playerIds.set(player, member.playerId);
-      const name = this.add.text(spawn.x, spawn.y - 54, member.name, uiTextStyle({
-        fontSize: '11px', fontStyle: '800', stroke: '#0b0d12', strokeThickness: 2,
-      })).setOrigin(0.5).setDepth(20);
+      const status = new PlayerStatusPresentation(this, spawn.x, spawn.y - 49, {
+        name: member.name,
+        level: player.stats.level,
+        hp: player.stats.hp,
+        maxHp: player.stats.maxHp,
+        xp: player.stats.xp,
+        xpToNext: player.stats.xpToNext,
+      });
       const shield = this.add.text(spawn.x + 28, spawn.y - 34, '', uiTextStyle({
         fontSize: '9px', color: '#d4d7de', fontStyle: '800', stroke: '#0b0d12', strokeThickness: 2,
       })).setOrigin(0.5).setDepth(20);
-      this.playerLabels.set(member.playerId, name);
+      this.playerStatusViews.set(member.playerId, status);
       this.shieldLabels.set(member.playerId, shield);
     });
     const leader = this.hostPlayers.get(this.startData.baselinePlayerId)
@@ -222,7 +279,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
         onExplosion: (effect) => udpClient.send('combat-effect', {
           type: 'explosion',
           ...effect,
-        } satisfies CombatEffectPayload),
+        } satisfies CombatEffectPayload, { reliable: true }),
       });
       if (profile) weapon.applySavedLevels(profile.state.weaponLevels);
       this.hostWeapons.set(playerId, weapon);
@@ -266,6 +323,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
     );
     this.localWasAlive = true;
     this.updateHostHud();
+    this.updateHostOffscreenIndicators();
     this.sendAllCheckpoints();
     this.time.delayedCall(0, () => {
       for (const player of this.hostPlayers.values()) {
@@ -281,6 +339,10 @@ export class MultiplayerGameScene extends Phaser.Scene {
       () => this.inputSource.read(this.localWasAlive),
     );
     this.localWasAlive = true;
+    // A late joiner may have entered after the host's first reliable
+    // checkpoint was acknowledged by the lobby scene. Request one again only
+    // after the gameplay scene is subscribed and ready to persist it.
+    udpClient.send('checkpoint-request', {}, { reliable: true });
   }
 
   private updateHost(delta: number): void {
@@ -288,13 +350,17 @@ export class MultiplayerGameScene extends Phaser.Scene {
     const localAlive = Boolean(local && local.stats.hp > 0 && local.sprite.active);
     this.hostInputs.set(this.room.localPlayerId, this.inputSource.update(localAlive));
     for (const [playerId, player] of this.hostPlayers) {
-      if (player.stats.hp <= 0 || !player.sprite.active) continue;
+      if (player.stats.hp <= 0 || !player.sprite.active) {
+        this.syncHostShieldPresentation(playerId, player, 0);
+        continue;
+      }
       player.update();
       this.hostWeapons.get(playerId)?.update(delta);
-      this.playerLabels.get(playerId)?.setPosition(player.sprite.x, player.sprite.y - 54);
+      this.syncHostPlayerStatus(playerId, player);
       const charges = this.runeCoordinator?.getShieldCharges(playerId) ?? 0;
       this.shieldLabels.get(playerId)?.setPosition(player.sprite.x + 28, player.sprite.y - 34)
         .setText(charges > 0 ? `방어 ${charges}` : '').setVisible(charges > 0);
+      this.syncHostShieldPresentation(playerId, player, charges);
     }
     this.enemySystem?.update(delta);
     this.runeCoordinator?.update(delta);
@@ -306,6 +372,9 @@ export class MultiplayerGameScene extends Phaser.Scene {
     this.checkpointElapsed += delta;
     if (this.checkpointElapsed >= 5_000) { this.checkpointElapsed %= 5_000; this.sendAllCheckpoints(); }
     this.updateHostHud();
+    // Host indicators must follow the authoritative player positions instead
+    // of retaining the spawn positions captured when the match began.
+    this.updateHostOffscreenIndicators();
     if (this.localWasAlive && !localAlive && local) this.startSpectating(local.sprite.x, local.sprite.y);
     if (!this.localWasAlive && localAlive && local) this.resumePlaying(local);
     if (!localAlive) this.deathCamera.update(delta);
@@ -319,6 +388,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
     const players = this.clientRenderer?.playerStates ?? [];
     const progress = this.clientRenderer?.progress;
     if (progress) this.partyHud.update(players, progress.gameTime, progress.killCount);
+    this.updateClientOffscreenIndicators(players);
     if (this.localWasAlive && !alive) {
       const local = players.find((player) => player.id === this.room.localPlayerId);
       if (local) this.startSpectating(local.x, local.y);
@@ -334,6 +404,9 @@ export class MultiplayerGameScene extends Phaser.Scene {
   private onUdpEvent(event: UdpBridgeEvent): void {
     if (event.type === 'room-state') {
       this.room = event.room;
+      if (this.isHost && !this.ended && event.room.status === 'playing') {
+        this.addLateJoinedPlayers();
+      }
       return;
     }
     if (event.type === 'host-disconnected') {
@@ -486,7 +559,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
     this.hostWeapons.get(playerId)?.setOwnerActive(false);
     this.cancelLevelOffers(playerId);
     this.runeCoordinator?.cancelPlayer(playerId);
-    this.playerLabels.get(playerId)?.setAlpha(0.5).setText(`${playerName} · 유령`);
+    this.syncHostPlayerStatus(playerId, player, '유령');
     this.shieldLabels.get(playerId)?.setVisible(false);
     this.reviveCoordinator?.registerDeath(playerId, playerName, x, y);
     if (reducesDifficulty) {
@@ -514,7 +587,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
     player.enterDefeatedState();
     this.hostWeapons.get(playerId)?.setOwnerActive(false);
     const playerName = this.room.members.find((member) => member.playerId === playerId)?.name ?? '플레이어';
-    this.playerLabels.get(playerId)?.setAlpha(0.5).setText(`${playerName} · 이탈`);
+    this.syncHostPlayerStatus(playerId, player, '이탈');
     this.shieldLabels.get(playerId)?.setVisible(false);
     if ([...this.hostPlayers.values()].every((candidate) => candidate.stats.hp <= 0 || !candidate.sprite.active)) {
       this.finishSession();
@@ -568,6 +641,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
   private applyCheckpoint(checkpoint: PlayerCheckpointPayload): void {
     if (checkpoint.profileId !== this.profileId) return;
     updateProfileState(this.profileId, checkpoint.state);
+    this.syncLocalSkills(getProfile(this.profileId)?.state ?? checkpoint.state);
   }
 
   private deliver(playerId: string, kind: string, payload: unknown, reliable = false): void {
@@ -578,6 +652,213 @@ export class MultiplayerGameScene extends Phaser.Scene {
   private updateHostHud(): void {
     const states = this.publisher?.playerStates() ?? [];
     this.partyHud.update(states, this.progress.gameTime, this.progress.killCount);
+  }
+
+  private createSkillHud(): void {
+    this.skillHud = new WeaponStatusHud(this, {
+      getWeaponKeys: () => (
+        this.hostPlayers.get(this.room.localPlayerId)?.stats.weapons
+        ?? this.localSkillState?.stats.weapons
+        ?? ['whip']
+      ),
+      getWeapons: () => (
+        this.hostWeapons.get(this.room.localPlayerId)?.definitions
+        ?? this.localSkillDefinitions
+      ),
+      getWeaponTooltip: (key) => (
+        this.hostWeapons.get(this.room.localPlayerId)?.getTooltipData(key)
+        ?? buildWeaponTooltipData(this.localSkillDefinitions[key])
+      ),
+    });
+  }
+
+  private addLateJoinedPlayers(): void {
+    const profiles = this.room.privateProfiles ?? {};
+    const addedPlayerIds: string[] = [];
+    for (const member of this.room.members) {
+      if (
+        member.isHost ||
+        member.presence !== 'playing' ||
+        member.connection === 'left' ||
+        this.hostPlayers.has(member.playerId)
+      ) continue;
+      const profile = profiles[member.playerId];
+      if (!profile) continue;
+      this.addLateJoinedPlayer(member, profile);
+      addedPlayerIds.push(member.playerId);
+    }
+    if (addedPlayerIds.length === 0) return;
+    this.publisher?.publish();
+    addedPlayerIds.forEach((playerId) => this.sendCheckpoint(playerId));
+  }
+
+  private addLateJoinedPlayer(member: RoomMember, profile: NetworkProfile): void {
+    const livingAnchor = [...this.hostPlayers.values()].find((player) => (
+      player.stats.hp > 0 && player.sprite.active
+    ));
+    const anchor = livingAnchor?.sprite ?? this.hostPlayers.get(this.room.localPlayerId)?.sprite;
+    const angle = member.joinOrder * 2.399963229728653;
+    const radius = 82 + Math.floor(Math.max(0, member.joinOrder - 1) / 6) * 48;
+    const boundary = WORLD_SIZE / 2 - 64;
+    const spawn = {
+      x: Phaser.Math.Clamp((anchor?.x ?? 0) + Math.cos(angle) * radius, -boundary, boundary),
+      y: Phaser.Math.Clamp((anchor?.y ?? 0) + Math.sin(angle) * radius, -boundary, boundary),
+    };
+    this.hostInputs.set(member.playerId, 0);
+    const player = new PlayerController(this, {
+      skin: profile.skin || PLAYER_SKIN,
+      spawn,
+      isRunActive: () => !this.ended && player.stats.hp > 0,
+      inputProvider: () => this.hostInputs.get(member.playerId) ?? 0,
+      cameraFollow: false,
+    });
+    player.applySavedState(profile.state.stats, spawn);
+    this.hostPlayers.set(member.playerId, player);
+    this.playerIds.set(player, member.playerId);
+    member.hp = player.stats.hp;
+    member.maxHp = player.stats.maxHp;
+    member.alive = true;
+
+    const status = new PlayerStatusPresentation(this, spawn.x, spawn.y - 49, {
+      name: member.name,
+      level: player.stats.level,
+      hp: player.stats.hp,
+      maxHp: player.stats.maxHp,
+      xp: player.stats.xp,
+      xpToNext: player.stats.xpToNext,
+    });
+    const shield = this.add.text(spawn.x + 28, spawn.y - 34, '', uiTextStyle({
+      fontSize: '9px', color: '#d4d7de', fontStyle: '800', stroke: '#0b0d12', strokeThickness: 2,
+    })).setOrigin(0.5).setDepth(20);
+    this.playerStatusViews.set(member.playerId, status);
+    this.shieldLabels.set(member.playerId, shield);
+
+    const weapon = new WeaponSystem(this, player, {
+      getEnemies: () => this.enemySystem!.getActiveEnemies(),
+      damageEnemy: (enemy, damage) => this.enemySystem!.damageEnemy(enemy, damage),
+      effects: this.audio.effects,
+      ownerCenteredExplosionViewport: true,
+      onExplosion: (effect) => udpClient.send('combat-effect', {
+        type: 'explosion',
+        ...effect,
+      } satisfies CombatEffectPayload, { reliable: true }),
+    });
+    weapon.applySavedLevels(profile.state.weaponLevels);
+    this.hostWeapons.set(member.playerId, weapon);
+    this.enemySystem?.connectCombat(
+      weapon,
+      this.worldMap.environmentColliders,
+      this.worldMap.waterLayer,
+    );
+    this.showToast(`${member.name}님이 진행 중인 게임에 참여했습니다.`);
+    this.time.delayedCall(800, () => {
+      if (!this.ended && player.stats.xp >= player.stats.xpToNext) this.beginLevelUp(player);
+    });
+  }
+
+  private syncHostShieldPresentation(
+    playerId: string,
+    player: PlayerController,
+    charges: number,
+  ): void {
+    let presentation = this.hostShieldPresentations.get(playerId);
+    if (player.sprite.active && player.stats.hp > 0 && charges > 0) {
+      if (!presentation) {
+        presentation = new ShieldPresentation(this, player.sprite.x, player.sprite.y, charges);
+        this.hostShieldPresentations.set(playerId, presentation);
+      } else {
+        presentation.sync(player.sprite.x, player.sprite.y, charges);
+      }
+      return;
+    }
+    if (!presentation) return;
+    const depleted = player.sprite.active && player.stats.hp > 0 && presentation.charges > 0 && charges === 0;
+    presentation.sync(player.sprite.x, player.sprite.y, charges);
+    presentation.destroy(depleted);
+    this.hostShieldPresentations.delete(playerId);
+  }
+
+  private syncHostPlayerStatus(
+    playerId: string,
+    player: PlayerController,
+    status?: string,
+  ): void {
+    const name = this.room.members.find((member) => member.playerId === playerId)?.name ?? '플레이어';
+    this.playerStatusViews.get(playerId)
+      ?.setPosition(player.sprite.x, player.sprite.y - 49)
+      .update({
+        name,
+        level: player.stats.level,
+        hp: player.stats.hp,
+        maxHp: player.stats.maxHp,
+        xp: player.stats.xp,
+        xpToNext: player.stats.xpToNext,
+        status,
+      });
+  }
+
+  private syncLocalSkills(state: GameSaveState): void {
+    const signature = JSON.stringify([
+      state.stats.weapons,
+      state.weaponLevels,
+    ]);
+    this.localSkillState = state;
+    applyWeaponDefinitionLevels(this.localSkillDefinitions, state.weaponLevels);
+    if (signature === this.localSkillSignature) return;
+    this.localSkillSignature = signature;
+    this.skillHud?.refresh();
+  }
+
+  private updateHostOffscreenIndicators(): void {
+    const targets: OffscreenIndicatorTarget[] = [];
+    for (const member of this.room.members) {
+      if (member.playerId === this.room.localPlayerId || member.connection === 'left') continue;
+      const player = this.hostPlayers.get(member.playerId);
+      if (!player) continue;
+      targets.push({
+        id: `player:${member.playerId}`,
+        kind: 'player',
+        label: `${member.name}${player.stats.hp <= 0 ? ' · 사망' : ''}`,
+        groupLabel: member.name,
+        x: player.sprite.x,
+        y: player.sprite.y,
+        active: true,
+      });
+    }
+    this.enemySystem?.getActiveEnemies()
+      .filter((enemy) => enemy.enemyType === 'boss')
+      .forEach((boss) => targets.push({
+        id: `boss:${boss.bossTier ?? 0}`,
+        kind: 'boss',
+        label: 'BOSS',
+        x: boss.x,
+        y: boss.y,
+        active: boss.active,
+      }));
+    this.offscreenIndicatorHud.update(targets);
+  }
+
+  private updateClientOffscreenIndicators(players: NetPlayerState[]): void {
+    const targets: OffscreenIndicatorTarget[] = players
+      .filter((player) => player.id !== this.room.localPlayerId && player.connected)
+      .map((player) => ({
+        id: `player:${player.id}`,
+        kind: 'player',
+        label: `${player.name}${!player.alive ? ' · 사망' : ''}`,
+        groupLabel: player.name,
+        x: player.x,
+        y: player.y,
+        active: true,
+      }));
+    (this.clientRenderer?.bossStates ?? []).forEach((boss) => targets.push({
+      id: `boss:${boss.id}`,
+      kind: 'boss',
+      label: 'BOSS',
+      x: boss.x,
+      y: boss.y,
+      active: boss.hp > 0,
+    }));
+    this.offscreenIndicatorHud.update(targets);
   }
 
   private startSpectating(x: number, y: number): void {
@@ -606,7 +887,7 @@ export class MultiplayerGameScene extends Phaser.Scene {
       member.maxHp = player.stats.maxHp;
       member.alive = true;
     }
-    this.playerLabels.get(playerId)?.setAlpha(1).setText(member?.name ?? '플레이어');
+    this.syncHostPlayerStatus(playerId, player);
     const reviverName = this.room.members.find((candidate) => candidate.playerId === reviverPlayerId)?.name;
     const playerName = member?.name ?? '플레이어';
     if (playerId !== this.room.localPlayerId) {

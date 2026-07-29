@@ -115,6 +115,80 @@ function seconds(milliseconds: number): string {
   return `${milliseconds / 1000}초`;
 }
 
+export function buildWeaponTooltipData(definition: WeaponDefinition): WeaponTooltipData {
+  const runtime = calculateWeaponRuntimeStats(definition);
+  const common = {
+    name: definition.name,
+    description: definition.desc,
+    level: definition.level,
+    maxLevel: definition.maxLevel,
+  };
+
+  switch (definition.type) {
+    case 'melee':
+      return {
+        ...common,
+        stats: [
+          { label: '타격 피해', value: `${runtime.damage}` },
+          { label: '공격 주기', value: seconds(runtime.cooldownMs!) },
+          { label: '공격 거리', value: `${runtime.range}` },
+        ],
+      };
+    case 'projectile':
+      return {
+        ...common,
+        stats: [
+          { label: '투사체 피해', value: `${runtime.damage}` },
+          { label: '연사 수', value: `${runtime.count}발 / 최대 ${BOLT_MAX_COUNT}발` },
+          { label: '연사 간격', value: seconds(BOLT_BURST_INTERVAL_MS) },
+          { label: '연사 후 대기', value: seconds(runtime.cooldownMs!) },
+          { label: '투사체 속도', value: `${runtime.speed}` },
+        ],
+      };
+    case 'aura':
+      return {
+        ...common,
+        stats: [
+          { label: '지속 피해', value: `${runtime.damage}` },
+          { label: '피해 주기', value: seconds(runtime.cooldownMs!) },
+          { label: '효과 반경', value: `${runtime.radius}` },
+        ],
+      };
+    case 'explosion':
+      return {
+        ...common,
+        stats: [
+          { label: '폭발 피해', value: `${runtime.damage}` },
+          { label: '폭발 수', value: `${runtime.count}개` },
+          { label: '공격 주기', value: seconds(runtime.cooldownMs!) },
+          { label: '폭발 반경', value: `${runtime.radius}` },
+        ],
+      };
+    case 'orbit':
+      return {
+        ...common,
+        stats: [
+          { label: '접촉 피해', value: `${runtime.damage}` },
+          { label: '구체 수', value: `${runtime.count}개 / 최대 ${ORBIT_MAX_COUNT}개` },
+          { label: '공전 반경', value: `${runtime.radius}` },
+          { label: '피해 간격', value: seconds(runtime.hitIntervalMs!) },
+        ],
+      };
+  }
+}
+
+export function applyWeaponDefinitionLevels(
+  definitions: WeaponDefinitions,
+  levels: Record<WeaponKey, number>,
+): void {
+  (Object.keys(definitions) as WeaponKey[]).forEach((key) => {
+    const level = levels[key];
+    definitions[key].level = Number.isFinite(level)
+      ? Phaser.Math.Clamp(Math.floor(level), 1, MAX_WEAPON_LEVEL)
+      : 1;
+  });
+}
+
 /** Owns weapon definitions, cooldowns, projectiles, and attack visuals. */
 export class WeaponSystem {
   readonly definitions: WeaponDefinitions = createWeaponDefinitions();
@@ -188,12 +262,7 @@ export class WeaponSystem {
   }
 
   applySavedLevels(levels: Record<WeaponKey, number>): void {
-    (Object.keys(this.definitions) as WeaponKey[]).forEach((key) => {
-      const level = levels[key];
-      this.definitions[key].level = Number.isFinite(level)
-        ? Phaser.Math.Clamp(Math.floor(level), 1, MAX_WEAPON_LEVEL)
-        : 1;
-    });
+    applyWeaponDefinitionLevels(this.definitions, levels);
     if (this.player.stats.weapons.includes('shield')) {
       this.ensureOrbits(this.definitions.shield);
     }
@@ -232,66 +301,7 @@ export class WeaponSystem {
   }
 
   getTooltipData(key: WeaponKey): WeaponTooltipData {
-    const definition = this.definitions[key];
-    const runtime = calculateWeaponRuntimeStats(definition);
-    const common = {
-      name: definition.name,
-      description: definition.desc,
-      level: definition.level,
-      maxLevel: definition.maxLevel,
-    };
-
-    switch (definition.type) {
-      case 'melee':
-        return {
-          ...common,
-          stats: [
-            { label: '타격 피해', value: `${runtime.damage}` },
-            { label: '공격 주기', value: seconds(runtime.cooldownMs!) },
-            { label: '공격 거리', value: `${runtime.range}` },
-          ],
-        };
-      case 'projectile':
-        return {
-          ...common,
-          stats: [
-            { label: '투사체 피해', value: `${runtime.damage}` },
-            { label: '연사 수', value: `${runtime.count}발 / 최대 ${BOLT_MAX_COUNT}발` },
-            { label: '연사 간격', value: seconds(BOLT_BURST_INTERVAL_MS) },
-            { label: '연사 후 대기', value: seconds(runtime.cooldownMs!) },
-            { label: '투사체 속도', value: `${runtime.speed}` },
-          ],
-        };
-      case 'aura':
-        return {
-          ...common,
-          stats: [
-            { label: '지속 피해', value: `${runtime.damage}` },
-            { label: '피해 주기', value: seconds(runtime.cooldownMs!) },
-            { label: '효과 반경', value: `${runtime.radius}` },
-          ],
-        };
-      case 'explosion':
-        return {
-          ...common,
-          stats: [
-            { label: '폭발 피해', value: `${runtime.damage}` },
-            { label: '폭발 수', value: `${runtime.count}개` },
-            { label: '공격 주기', value: seconds(runtime.cooldownMs!) },
-            { label: '폭발 반경', value: `${runtime.radius}` },
-          ],
-        };
-      case 'orbit':
-        return {
-          ...common,
-          stats: [
-            { label: '접촉 피해', value: `${runtime.damage}` },
-            { label: '구체 수', value: `${runtime.count}개 / 최대 ${ORBIT_MAX_COUNT}개` },
-            { label: '공전 반경', value: `${runtime.radius}` },
-            { label: '피해 간격', value: seconds(runtime.hitIntervalMs!) },
-          ],
-        };
-    }
+    return buildWeaponTooltipData(this.definitions[key]);
   }
 
   refreshWeapon(key: WeaponKey): void {
