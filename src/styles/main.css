@@ -1,0 +1,169 @@
+@font-face {
+  font-family: 'Nunito';
+  src: url('/fonts/Nunito-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nunito';
+  src: url('/fonts/Nunito-SemiBold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nunito';
+  src: url('/fonts/Nunito-ExtraBold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#game-container {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  background: #0b0d12;
+  font-family: 'Nunito', sans-serif;
+  overscroll-behavior: none;
+}
+
+#game-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+}
+
+canvas {
+  display: block;
+}
+
+.profile-name-dialog {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(0 0 0 / 76%);
+}
+
+.profile-name-dialog__panel {
+  width: min(420px, 100%);
+  padding: 30px;
+  color: #f7f7fa;
+  text-align: center;
+  background: #171a21;
+  border: 1px solid #353945;
+  border-radius: 18px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 40%);
+}
+
+.profile-name-dialog__panel h2 {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.profile-name-dialog__panel p {
+  margin-top: 8px;
+  color: #a7acb7;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.profile-name-dialog__input {
+  width: 100%;
+  height: 48px;
+  margin-top: 22px;
+  padding: 0 16px;
+  color: #f7f7fa;
+  background: #111318;
+  border: 1px solid #353945;
+  border-radius: 12px;
+  outline: none;
+  font: 800 17px 'Nunito', sans-serif;
+}
+
+.profile-name-dialog__input:focus {
+  border-color: #6c5ce7;
+  box-shadow: 0 0 0 3px rgb(108 92 231 / 22%);
+}
+
+.profile-name-dialog__input--error {
+  border-color: #6c5ce7;
+  animation: profile-name-shake 180ms ease-in-out 2;
+}
+
+.profile-name-dialog__actions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.profile-name-dialog__button {
+  min-width: 130px;
+  height: 44px;
+  padding: 0 20px;
+  color: #f7f7fa;
+  border: 1px solid #353945;
+  border-radius: 12px;
+  cursor: pointer;
+  font: 800 15px 'Nunito', sans-serif;
+  transition: transform 90ms ease, filter 90ms ease;
+}
+
+.profile-name-dialog__button:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.profile-name-dialog__button:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.profile-name-dialog__button--secondary {
+  background: #20242d;
+}
+
+.profile-name-dialog__button--primary {
+  color: #fff;
+  background: #6c5ce7;
+  border-color: #6c5ce7;
+}
+
+@keyframes profile-name-shake {
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+#startup-error {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #fff;
+  background: #0b0d12;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  text-align: center;
+  white-space: pre-line;
+}

@@ -1,0 +1,82 @@
+{
+  "name": "codmos-survival",
+  "productName": "CODMOS SURVIVORS",
+  "version": "1.1.0",
+  "description": "CODMOS SURVIVORS single-player and LAN cooperative game",
+  "author": "Logibrothers",
+  "license": "UNLICENSED",
+  "homepage": "https://codmos.io",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "typecheck:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run typecheck && vite build",
+    "build:electron": "npm run typecheck:electron && node scripts/build-electron.mjs",
+    "dev:electron": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "smoke:electron": "npm run build && npm run build:electron && cross-env CODEMOS_ELECTRON_SMOKE=1 electron .",
+    "package:mac": "npm run build && npm run build:electron && electron-builder --mac dmg zip --arm64 --x64",
+    "package:win": "npm run build && npm run build:electron && electron-builder --win nsis --x64",
+    "test:difficulty": "node scripts/run-adaptive-difficulty-smoke.mjs",
+    "test:explosion": "node scripts/run-explosion-smoke.mjs",
+    "test:level-up": "node scripts/run-level-up-smoke.mjs",
+    "test:save-compat": "node scripts/run-save-compatibility-smoke.mjs",
+    "test:udp": "node scripts/run-udp-smoke.mjs",
+    "test:weapons": "node scripts/run-weapon-progression-smoke.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "concurrently": "^10.0.4",
+    "cross-env": "^10.1.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "phaser": "^3.60.0",
+    "typescript": "^7.0.2",
+    "vite": "8.1.5",
+    "wait-on": "^9.1.0"
+  },
+  "build": {
+    "appId": "io.codmos.survival",
+    "productName": "CODMOS SURVIVORS",
+    "copyright": "Copyright © 2026 Logibrothers. All rights reserved.",
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.games",
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "같은 Wi-Fi에 연결된 CODMOS SURVIVORS 플레이어의 방을 찾고 LAN 협동 플레이에 연결하기 위해 로컬 네트워크를 사용합니다."
+      },
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    }
+  }
+}

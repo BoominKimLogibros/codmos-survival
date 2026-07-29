@@ -1,0 +1,27 @@
+
+bbc674d1-b8a4-46c0-ba86-2ab06930d8e7.png
+size: 316, 532
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+flooreffect
+  rotate: true
+  xy: 278, 216
+  size: 311, 33
+  orig: 314, 33
+  offset: 1, 0
+  index: -1
+p01
+  rotate: false
+  xy: 4, 4
+  size: 257, 185
+  orig: 258, 185
+  offset: 0, 0
+  index: -1
+shield
+  rotate: true
+  xy: 4, 193
+  size: 334, 270
+  orig: 334, 270
+  offset: 0, 0
+  index: -1

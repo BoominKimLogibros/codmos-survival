@@ -1,0 +1,41 @@
+
+6a94c24e-365c-4df2-ac87-e6cd30f9b301.png
+size: 352, 308
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+p01
+  rotate: false
+  xy: 290, 76
+  size: 44, 82
+  orig: 44, 82
+  offset: 0, 0
+  index: -1
+p02
+  rotate: false
+  xy: 212, 4
+  size: 74, 154
+  orig: 74, 154
+  offset: 0, 0
+  index: -1
+p03
+  rotate: true
+  xy: 4, 137
+  size: 166, 204
+  orig: 166, 204
+  offset: 0, 0
+  index: -1
+p04
+  rotate: false
+  xy: 4, 9
+  size: 186, 124
+  orig: 186, 124
+  offset: 0, 0
+  index: -1
+smoke
+  rotate: true
+  xy: 212, 162
+  size: 141, 135
+  orig: 142, 136
+  offset: 1, 0
+  index: -1

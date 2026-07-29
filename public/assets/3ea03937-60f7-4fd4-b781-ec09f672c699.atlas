@@ -1,0 +1,118 @@
+
+21cd105e-fe40-41fa-b76f-79eea999a47c.png
+size: 284, 744
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+arm_l
+  rotate: true
+  xy: 4, 8
+  size: 40, 62
+  orig: 40, 62
+  offset: 0, 0
+  index: -1
+arm_r
+  rotate: true
+  xy: 182, 76
+  size: 89, 96
+  orig: 89, 96
+  offset: 0, 0
+  index: -1
+attacked
+  rotate: false
+  xy: 187, 169
+  size: 93, 155
+  orig: 93, 155
+  offset: 0, 0
+  index: -1
+body
+  rotate: false
+  xy: 172, 4
+  size: 73, 68
+  orig: 73, 68
+  offset: 0, 0
+  index: -1
+die01
+  rotate: true
+  xy: 4, 182
+  size: 146, 179
+  orig: 146, 218
+  offset: 0, 20
+  index: -1
+die02
+  rotate: true
+  xy: 4, 332
+  size: 165, 214
+  orig: 165, 242
+  offset: 0, 15
+  index: -1
+eyes_die
+  rotate: true
+  xy: 260, 678
+  size: 61, 18
+  orig: 61, 18
+  offset: 0, 0
+  index: -1
+eyes_idle
+  rotate: true
+  xy: 260, 621
+  size: 53, 15
+  orig: 53, 15
+  offset: 0, 0
+  index: -1
+eyes_stun
+  rotate: true
+  xy: 144, 46
+  size: 61, 24
+  orig: 62, 24
+  offset: 0, 0
+  index: -1
+head
+  rotate: false
+  xy: 4, 52
+  size: 136, 126
+  orig: 136, 127
+  offset: 0, 1
+  index: -1
+leg_l
+  rotate: false
+  xy: 144, 145
+  size: 34, 33
+  orig: 34, 33
+  offset: 0, 0
+  index: -1
+leg_r
+  rotate: false
+  xy: 144, 145
+  size: 34, 33
+  orig: 34, 33
+  offset: 0, 0
+  index: -1
+spawn
+  rotate: false
+  xy: 4, 501
+  size: 252, 238
+  orig: 252, 238
+  offset: 0, 0
+  index: -1
+stun01
+  rotate: true
+  xy: 222, 328
+  size: 169, 52
+  orig: 170, 52
+  offset: 0, 0
+  index: -1
+stun02
+  rotate: false
+  xy: 144, 111
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1
+stun03
+  rotate: false
+  xy: 144, 111
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1

@@ -1,0 +1,90 @@
+ 
+f533c098-9a1d-4981-907f-51328eecf2ab.png
+size: 584, 472
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+attacked
+  rotate: true
+  xy: 440, 272
+  size: 196, 140
+  orig: 196, 141
+  offset: 0, 1
+  index: -1
+body
+  rotate: false
+  xy: 463, 135
+  size: 113, 133
+  orig: 113, 133
+  offset: 0, 0
+  index: -1
+die01
+  rotate: false
+  xy: 260, 173
+  size: 176, 295
+  orig: 176, 325
+  offset: 0, 16
+  index: -1
+die02
+  rotate: true
+  xy: 4, 4
+  size: 165, 294
+  orig: 165, 334
+  offset: 0, 21
+  index: -1
+eyes_die
+  rotate: false
+  xy: 177, 211
+  size: 77, 15
+  orig: 79, 15
+  offset: 1, 0
+  index: -1
+eyes_idle
+  rotate: true
+  xy: 440, 199
+  size: 69, 16
+  orig: 69, 16
+  offset: 0, 0
+  index: -1
+eyes_stun
+  rotate: true
+  xy: 463, 50
+  size: 81, 24
+  orig: 81, 24
+  offset: 0, 0
+  index: -1
+head
+  rotate: true
+  xy: 302, 20
+  size: 149, 157
+  orig: 149, 157
+  offset: 0, 0
+  index: -1
+spawn
+  rotate: false
+  xy: 4, 230
+  size: 252, 238
+  orig: 252, 238
+  offset: 0, 0
+  index: -1
+stun01
+  rotate: false
+  xy: 4, 174
+  size: 169, 52
+  orig: 170, 52
+  offset: 0, 0
+  index: -1
+stun02
+  rotate: false
+  xy: 177, 177
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1
+stun03
+  rotate: false
+  xy: 177, 177
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1

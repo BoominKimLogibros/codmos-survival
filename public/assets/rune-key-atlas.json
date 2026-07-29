@@ -1,0 +1,167 @@
+{
+	"textures": [
+		{
+			"image": "key_atlas.png",
+			"format": "RGBA8888",
+			"size": {
+				"w": 1236,
+				"h": 172
+			},
+			"scale": 1,
+			"frames": [
+				{
+					"filename": "img_directionkey_Down",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 188,
+						"h": 148
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 188,
+						"h": 148
+					},
+					"frame": {
+						"x": 0,
+						"y": 0,
+						"w": 188,
+						"h": 148
+					}
+				},
+				{
+					"filename": "img_directionkey_L",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 172,
+						"h": 172
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					},
+					"frame": {
+						"x": 188,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					}
+				},
+				{
+					"filename": "img_directionkey_R",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 172,
+						"h": 172
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					},
+					"frame": {
+						"x": 360,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					}
+				},
+				{
+					"filename": "img_directionkey_Up",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 188,
+						"h": 148
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 188,
+						"h": 148
+					},
+					"frame": {
+						"x": 532,
+						"y": 0,
+						"w": 188,
+						"h": 148
+					}
+				},
+				{
+					"filename": "img_gamekey_M",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 172,
+						"h": 172
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					},
+					"frame": {
+						"x": 720,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					}
+				},
+				{
+					"filename": "img_gamekey_X",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 172,
+						"h": 172
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					},
+					"frame": {
+						"x": 892,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					}
+				},
+				{
+					"filename": "img_gamekey_Z",
+					"rotated": false,
+					"trimmed": false,
+					"sourceSize": {
+						"w": 172,
+						"h": 172
+					},
+					"spriteSourceSize": {
+						"x": 0,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					},
+					"frame": {
+						"x": 1064,
+						"y": 0,
+						"w": 172,
+						"h": 172
+					}
+				}
+			]
+		}
+	],
+	"meta": {
+		"app": "https://www.codeandweb.com/texturepacker",
+		"version": "3.0",
+		"smartupdate": "$TexturePacker:SmartUpdate:6a521f21c75a10b22ede3b8da5134f2a:8f32aced1591781e3d86f51659b16582:5728296f2858ca62fcd9b79e1a934ca0$"
+	}
+}
