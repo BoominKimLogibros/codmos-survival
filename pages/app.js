@@ -17,7 +17,7 @@ updateScrollProgress();
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const revealElements = document.querySelectorAll(
-  '.section__heading, .feature-card, .mode-card, .video-card, .download__copy, .download-card',
+  '.section__heading, .feature-card, .mode-card, .video-card, .download__copy, .download-card, .faq__intro, .faq-step, .command-card, .faq__tip',
 );
 
 if (!reduceMotion && 'IntersectionObserver' in window) {
@@ -38,3 +38,21 @@ if (!reduceMotion && 'IntersectionObserver' in window) {
 
   revealElements.forEach((element) => revealObserver.observe(element));
 }
+
+document.querySelectorAll('[data-copy-command]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    const command = button.dataset.copyCommand;
+    if (!command) return;
+
+    try {
+      await navigator.clipboard.writeText(command);
+      const originalLabel = button.textContent;
+      button.textContent = '복사 완료';
+      window.setTimeout(() => {
+        button.textContent = originalLabel;
+      }, 1800);
+    } catch {
+      button.textContent = '복사 실패';
+    }
+  });
+});
