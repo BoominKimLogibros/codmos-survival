@@ -4,12 +4,18 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const output = resolve(root, 'dist/pages');
 const media = resolve(output, 'media');
+const videos = resolve(output, 'videos');
 
-await mkdir(media, { recursive: true });
+await Promise.all([
+  mkdir(media, { recursive: true }),
+  mkdir(videos, { recursive: true }),
+]);
 
 for (const filename of ['index.html', 'styles.css', 'app.js']) {
   await cp(resolve(root, 'pages', filename), resolve(output, filename));
 }
+
+await cp(resolve(root, 'pages', 'videos'), videos, { recursive: true });
 
 const assets = {
   'game-icon.png': 'public/assets/codmos-survivors-app-icon.png',

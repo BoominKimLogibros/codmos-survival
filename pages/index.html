@@ -29,6 +29,7 @@
       <nav class="nav__links" aria-label="페이지 메뉴">
         <a href="#about">게임 소개</a>
         <a href="#modes">플레이 방법</a>
+        <a href="#gameplay">플레이 영상</a>
         <a href="#download">다운로드</a>
       </nav>
       <a class="button button--small" href="./play/">웹에서 바로하기</a>
@@ -156,6 +157,49 @@
               <li><b>03</b><span>한 명이 방을 만들고 함께 시작</span></li>
             </ol>
             <a class="button button--dark" href="#download">내 컴퓨터용 다운로드</a>
+          </article>
+        </div>
+      </section>
+
+      <section class="section gameplay" id="gameplay" aria-labelledby="gameplay-title">
+        <div class="section__heading section__heading--light">
+          <p class="eyebrow">WATCH THE ACTION</p>
+          <h2 id="gameplay-title">플레이를 먼저 만나보세요</h2>
+          <p>혼자 성장하는 생존 전투와 같은 네트워크에서 펼쳐지는 협동 플레이를 영상으로 확인하세요.</p>
+        </div>
+        <div class="video-grid">
+          <article class="video-card">
+            <div class="video-card__screen">
+              <video controls muted playsinline preload="metadata" poster="./videos/solo-poster.jpg" aria-label="CODMOS SURVIVORS 혼자하기 플레이 영상">
+                <source src="./videos/solo-play.mp4" type="video/mp4">
+                사용 중인 브라우저에서는 영상을 재생할 수 없습니다.
+              </video>
+              <span class="video-card__badge"><i></i> WEB SOLO</span>
+            </div>
+            <div class="video-card__copy">
+              <span>01</span>
+              <div>
+                <h3>혼자하기</h3>
+                <p>무기와 룬을 조합해 몰려오는 몬스터와 보스를 돌파하세요.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="video-card">
+            <div class="video-card__screen">
+              <video controls muted playsinline preload="metadata" poster="./videos/coop-poster.jpg" aria-label="CODMOS SURVIVORS 같이하기 플레이 영상">
+                <source src="./videos/coop-play.mp4" type="video/mp4">
+                사용 중인 브라우저에서는 영상을 재생할 수 없습니다.
+              </video>
+              <span class="video-card__badge video-card__badge--coop"><i></i> LAN CO-OP</span>
+            </div>
+            <div class="video-card__copy">
+              <span>02</span>
+              <div>
+                <h3>같이하기</h3>
+                <p>같은 Wi-Fi에 연결된 친구들과 힘을 합쳐 한 전장에서 살아남으세요.</p>
+              </div>
+            </div>
           </article>
         </div>
       </section>
