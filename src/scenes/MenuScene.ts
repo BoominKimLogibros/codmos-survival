@@ -152,9 +152,12 @@ export class MenuScene extends Phaser.Scene {
     this.previousButton.on('pointerdown', () => this._changePage(-1));
     this.nextButton.on('pointerdown', () => this._changePage(1));
 
-    const actionWidth = Math.min(250, (width - 48) / 2);
+    const soloOnly = !udpClient.available;
+    const actionWidth = soloOnly
+      ? Math.min(360, width - 48)
+      : Math.min(250, (width - 48) / 2);
     const actionOffset = actionWidth / 2 + 7;
-    this.startButton = createUiButton(this, width / 2 - actionOffset, height - 42, '혼자하기', {
+    this.startButton = createUiButton(this, soloOnly ? width / 2 : width / 2 - actionOffset, height - 42, '혼자하기', {
       width: actionWidth, height: 50, fill: UI_COLORS.primary, border: UI_COLORS.primary,
       color: '#ffffff', fontSize: width < 580 ? '15px' : '19px',
     });
@@ -170,6 +173,7 @@ export class MenuScene extends Phaser.Scene {
       uiTextStyle({ fontSize: '9px', color: '#a7acb7', fontStyle: '600' }),
     ).setOrigin(0.5);
     this.udpButton.add(this.udpHint);
+    this.udpButton.setVisible(!soloOnly);
 
     this.menuToast = createUiToast(this, width / 2, height - 145, {
       width: Math.min(430, width - 32),
@@ -920,9 +924,14 @@ export class MenuScene extends Phaser.Scene {
     this.previousButton.setPosition(width / 2 - 90, height - 91);
     this.nextButton.setPosition(width / 2 + 90, height - 91);
     this.pageText.setPosition(width / 2, height - 91);
-    const actionWidth = Math.min(250, (width - 48) / 2);
+    const soloOnly = !udpClient.available;
+    const actionWidth = soloOnly
+      ? Math.min(360, width - 48)
+      : Math.min(250, (width - 48) / 2);
     const actionOffset = actionWidth / 2 + 7;
-    this.startButton.setPosition(width / 2 - actionOffset, height - 42).resizeButton(actionWidth, 50);
+    this.startButton
+      .setPosition(soloOnly ? width / 2 : width / 2 - actionOffset, height - 42)
+      .resizeButton(actionWidth, 50);
     this.udpButton.setPosition(width / 2 + actionOffset, height - 42).resizeButton(actionWidth, 50);
     this.menuToast.setPosition(width / 2, height - 145);
     this._refreshProfiles();
