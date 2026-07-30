@@ -4,6 +4,9 @@ Phaser 3 기반 생존 게임입니다. 게임 엔진, Spine 플러그인, 이�
 
 웹에서는 기존 싱글플레이를 제공하고 Electron 앱에서는 같은 LAN에서 최대 20명이 참여하는 UDP 협동 플레이를 추가로 제공합니다.
 
+- [웹에서 혼자 바로하기](https://boominkimlogibros.github.io/codmos-survival/)
+- [Windows·macOS 최신 버전 다운로드](https://github.com/BoominKimLogibros/codmos-survival/releases/latest)
+
 - 현재 버전: `1.1.1`
 - 공식 사이트: [codmos.io](https://codmos.io)
 - 저작권: Copyright © 2026 Logibrothers. All rights reserved.
