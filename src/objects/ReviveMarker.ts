@@ -30,7 +30,7 @@ export class ReviveMarker {
     this.gaugeFill = scene.add.rectangle(-37, 23, 1, 7, UI_COLORS.primary, 1)
       .setOrigin(0, 0.5)
       .setVisible(false);
-    this.label = scene.add.text(0, 37, `${playerName} · 10초간 머물러 부활`, uiTextStyle({
+    this.label = scene.add.text(0, 37, `${playerName} · 10초간 기도해 부활`, uiTextStyle({
       fontSize: '9px',
       color: '#d4d7de',
       fontStyle: '800',
@@ -47,8 +47,8 @@ export class ReviveMarker {
       .setDisplaySize(Math.max(1, 74 * normalized), 7)
       .setVisible(normalized > 0);
     this.label.setText(charging
-      ? `${playerName} · 부활 ${Math.floor(normalized * 100)}%`
-      : `${playerName} · 10초간 머물러 부활`);
+      ? `${playerName} · 기도 중 ${Math.floor(normalized * 100)}%`
+      : `${playerName} · 10초간 기도해 부활`);
   }
 
   destroy(): void {

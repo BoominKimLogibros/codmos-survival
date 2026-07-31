@@ -8,7 +8,12 @@ import {
   normalizeSaveState,
   readProfileSaveFile,
 } from './saveService';
-import type { GameSaveState, Profile } from '../game/types';
+import {
+  applySkillTrade,
+  calculateEffectiveUnlockLevel,
+  type SkillTradeResult,
+} from '../game/progression';
+import type { GameSaveState, Profile, WeaponKey } from '../game/types';
 
 const STORAGE_KEY = 'codmos-survival-profiles-v1';
 const PROFILE_STORE_VERSION = 1;
@@ -75,7 +80,7 @@ function normalizeStoredProfile(rawProfile: unknown, index: number): Profile | n
     return {
       id: typeof stored.id === 'string' && stored.id ? stored.id : createId(),
       name: sanitizeProfileName(stored.name, `프로필 ${index + 1}`),
-      skin: normalizeUnlockedSkinName(stored.skin, state.stats.level),
+      skin: normalizeUnlockedSkinName(stored.skin, calculateEffectiveUnlockLevel(state)),
       state,
       createdAt: typeof stored.createdAt === 'string' ? stored.createdAt : new Date().toISOString(),
       updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : new Date().toISOString(),
@@ -155,7 +160,7 @@ export function createProfile({
   const profile: Profile = {
     id: createId(),
     name: makeUniqueName(name || `프로필 ${store.profiles.length + 1}`, store.profiles),
-    skin: normalizeUnlockedSkinName(skin, normalizedState.stats.level),
+    skin: normalizeUnlockedSkinName(skin, calculateEffectiveUnlockLevel(normalizedState)),
     state: normalizedState,
     createdAt: now,
     updatedAt: now,
@@ -181,8 +186,9 @@ export function changeProfileSkin(profileId: string, skin: string): Profile | nu
   const store = loadStore();
   const profile = store.profiles.find((item) => item.id === profileId);
   if (!profile) return null;
-  if (!isSkinUnlocked(skin, profile.state.stats.level)) return null;
-  profile.skin = normalizeUnlockedSkinName(skin, profile.state.stats.level);
+  const unlockLevel = calculateEffectiveUnlockLevel(profile.state);
+  if (!isSkinUnlocked(skin, unlockLevel)) return null;
+  profile.skin = normalizeUnlockedSkinName(skin, unlockLevel);
   profile.updatedAt = new Date().toISOString();
   persistStore(store);
   return clone(profile);
@@ -194,9 +200,33 @@ export function updateProfileState(profileId: string, state: GameSaveState): boo
   if (!profile) return false;
   const normalizedState = normalizeSaveState(state);
   profile.state = clone(normalizedState);
-  profile.skin = normalizeUnlockedSkinName(profile.skin, normalizedState.stats.level);
+  profile.skin = normalizeUnlockedSkinName(
+    profile.skin,
+    calculateEffectiveUnlockLevel(normalizedState),
+  );
   profile.updatedAt = new Date().toISOString();
   return persistStore(store);
+}
+
+export function tradeProfileSkill(
+  profileId: string,
+  skill: WeaponKey,
+  random: () => number = Math.random,
+): SkillTradeResult | null {
+  const store = loadStore();
+  const profile = store.profiles.find((item) => item.id === profileId);
+  if (!profile) return null;
+  const state = clone(profile.state);
+  const result = applySkillTrade(state, skill, random);
+  if (!result.attempted) return result;
+  profile.state = normalizeSaveState(state);
+  profile.skin = normalizeUnlockedSkinName(
+    profile.skin,
+    calculateEffectiveUnlockLevel(profile.state),
+  );
+  profile.updatedAt = new Date().toISOString();
+  persistStore(store);
+  return result;
 }
 
 /** Resets gameplay data while preserving the profile's identity and user-defined name. */

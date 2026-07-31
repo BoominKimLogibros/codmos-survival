@@ -1,11 +1,19 @@
 import { UI_COLORS, uiTextStyle } from '../ui/theme';
 
-/** Static death-site presentation that remains visible while the map is inspected. */
+export const DEATH_MARKER_DROP_DURATION_MS = 520;
+export const DEATH_MARKER_FADE_DURATION_MS = 460;
+
+/** One-shot tombstone that drops from the top of the camera and then disappears. */
 export class DeathMarker {
   readonly container: Phaser.GameObjects.Container;
 
-  constructor(scene: Phaser.Scene, x: number, y: number) {
-    this.container = scene.add.container(x, y - 110).setDepth(20);
+  private destroyed = false;
+  private readonly onShutdown = (): void => this.destroy();
+
+  constructor(private readonly scene: Phaser.Scene, x: number, y: number) {
+    // worldView.top is screen-space y:0 expressed in world coordinates.
+    const startY = scene.cameras.main.worldView.top - 56;
+    this.container = scene.add.container(x, startY).setDepth(20);
 
     const shadow = scene.add.ellipse(0, 13, 72, 18, UI_COLORS.shadow, 0.38);
     const stone = scene.add.graphics();
@@ -28,8 +36,29 @@ export class DeathMarker {
     scene.tweens.add({
       targets: this.container,
       y,
-      duration: 420,
+      duration: DEATH_MARKER_DROP_DURATION_MS,
       ease: 'Bounce.easeOut',
+      onComplete: () => {
+        if (this.destroyed || !this.container.active) return;
+        scene.tweens.add({
+          targets: this.container,
+          alpha: 0,
+          delay: 120,
+          duration: DEATH_MARKER_FADE_DURATION_MS,
+          ease: 'Cubic.easeIn',
+          onComplete: () => this.destroy(),
+        });
+      },
     });
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown);
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.scene.events.off(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown);
+    if (!this.container.active) return;
+    this.scene.tweens.killTweensOf(this.container);
+    this.container.destroy(true);
   }
 }

@@ -25,6 +25,10 @@ export class MultiplayerLevelOverlay {
     });
   }
 
+  get isOpen(): boolean {
+    return this.root !== null;
+  }
+
   show(offer: LevelOfferPayload): void {
     this.destroyPanel();
     this.offer = offer;

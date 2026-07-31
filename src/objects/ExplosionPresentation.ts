@@ -10,13 +10,17 @@ export interface ExplosionVisualData {
   fuseDurationMs: number;
 }
 
+export interface ExplosionPlayback {
+  cancel(): void;
+}
+
 /** Flies a spinning bomb from its owner to the target, then presents the impact locally. */
 export class ExplosionPresentation {
   static play(
     scene: Phaser.Scene,
     data: ExplosionVisualData,
     onImpact?: () => void,
-  ): void {
+  ): ExplosionPlayback {
     const startX = Number.isFinite(data.startX) ? data.startX : data.x;
     const startY = Number.isFinite(data.startY) ? data.startY : data.y;
     const duration = Phaser.Math.Clamp(data.flightDurationMs || 500, 280, 900);
@@ -28,6 +32,8 @@ export class ExplosionPresentation {
       .setAngle(Phaser.Math.Between(-20, 20));
     const bombScale = bomb.scaleX;
     let lastTrailProgress = -1;
+    let cancelled = false;
+    let cancelFuse: (() => void) | undefined;
 
     scene.tweens.addCounter({
       from: 0,
@@ -35,6 +41,7 @@ export class ExplosionPresentation {
       duration,
       ease: 'Sine.easeInOut',
       onUpdate: (tween) => {
+        if (cancelled || !bomb.active) return;
         const progress = tween.getValue();
         bomb.setPosition(
           Phaser.Math.Linear(startX, data.x, progress),
@@ -49,11 +56,21 @@ export class ExplosionPresentation {
         }
       },
       onComplete: () => {
-        if (!scene.sys.isActive()) return;
+        if (cancelled || !scene.sys.isActive() || !bomb.active) return;
         bomb.setPosition(data.x, data.y).setScale(bombScale);
-        this.playFuse(scene, data, bomb, onImpact);
+        cancelFuse = this.playFuse(scene, data, bomb, onImpact);
       },
     });
+
+    return {
+      cancel: () => {
+        if (cancelled) return;
+        cancelled = true;
+        cancelFuse?.();
+        scene.tweens.killTweensOf(bomb);
+        if (bomb.active) bomb.destroy();
+      },
+    };
   }
 
   private static playFuse(
@@ -61,7 +78,7 @@ export class ExplosionPresentation {
     data: ExplosionVisualData,
     bomb: Phaser.GameObjects.Image,
     onImpact?: () => void,
-  ): void {
+  ): () => void {
     const fuseDuration = Phaser.Math.Clamp(data.fuseDurationMs || 1000, 250, 3000);
     const fuseRing = scene.add.circle(data.x, data.y, 21, UI_COLORS.primary, 0.08)
       .setStrokeStyle(2, UI_COLORS.white, 0.8)
@@ -100,7 +117,10 @@ export class ExplosionPresentation {
       duration: fuseDuration,
       ease: 'Linear',
     });
-    scene.time.delayedCall(fuseDuration, () => {
+    let completed = false;
+    const impactTimer = scene.time.delayedCall(fuseDuration, () => {
+      if (completed) return;
+      completed = true;
       updateCountdown.remove(false);
       countdown.destroy();
       fuseRing.destroy();
@@ -108,6 +128,17 @@ export class ExplosionPresentation {
       onImpact?.();
       this.playImpact(scene, data, bomb);
     });
+    return () => {
+      if (completed) return;
+      completed = true;
+      impactTimer.remove(false);
+      updateCountdown.remove(false);
+      scene.tweens.killTweensOf(bomb);
+      scene.tweens.killTweensOf(fuseRing);
+      countdown.destroy();
+      fuseRing.destroy();
+      if (bomb.active) bomb.destroy();
+    };
   }
 
   private static playImpact(
@@ -116,21 +147,48 @@ export class ExplosionPresentation {
     bomb: Phaser.GameObjects.Image,
   ): void {
     const radius = Phaser.Math.Clamp(data.radius, 20, 220);
-    const innerRing = scene.add.circle(data.x, data.y, radius * 0.28, UI_COLORS.white, 0.72)
-      .setDepth(6.8);
-    const outerRing = scene.add.circle(data.x, data.y, radius * 0.22, UI_COLORS.primary, 0.56)
-      .setDepth(6.7);
-
     scene.tweens.add({
       targets: bomb,
-      angle: bomb.angle + 100,
       alpha: 0,
-      scaleX: bomb.scaleX * 2.2,
-      scaleY: bomb.scaleY * 2.2,
-      duration: 460,
+      scaleX: bomb.scaleX * 1.35,
+      scaleY: bomb.scaleY * 1.35,
+      duration: 120,
       ease: 'Cubic.easeOut',
       onComplete: () => bomb.destroy(),
     });
+
+    if (scene.game.renderer.type === Phaser.WEBGL) {
+      try {
+        const effect = scene.add.spine(
+          data.x,
+          data.y,
+          'explosionSpine',
+          'animation',
+          false,
+        ).setDepth(7.2).setScale(Phaser.Math.Clamp(radius / 122, 0.22, 1.8));
+        scene.time.delayedCall(650, () => {
+          if (effect.active) effect.destroy();
+        });
+        return;
+      } catch (error) {
+        console.warn('Explosion Spine effect failed, using fallback:', error);
+      }
+    }
+
+    this.playFallbackImpact(scene, data.x, data.y, radius);
+  }
+
+  private static playFallbackImpact(
+    scene: Phaser.Scene,
+    x: number,
+    y: number,
+    radius: number,
+  ): void {
+    const innerRing = scene.add.circle(x, y, radius * 0.28, UI_COLORS.white, 0.72)
+      .setDepth(6.8);
+    const outerRing = scene.add.circle(x, y, radius * 0.22, UI_COLORS.primary, 0.56)
+      .setDepth(6.7);
+
     scene.tweens.add({
       targets: innerRing,
       alpha: 0,
@@ -154,16 +212,16 @@ export class ExplosionPresentation {
       const angle = (index / 10) * Math.PI * 2 + Phaser.Math.FloatBetween(-0.16, 0.16);
       const distance = radius * Phaser.Math.FloatBetween(0.65, 1.15);
       const particle = scene.add.circle(
-        data.x,
-        data.y,
+        x,
+        y,
         Phaser.Math.FloatBetween(2, 4),
         index % 2 === 0 ? UI_COLORS.white : UI_COLORS.primary,
         0.9,
       ).setDepth(7.2);
       scene.tweens.add({
         targets: particle,
-        x: data.x + Math.cos(angle) * distance,
-        y: data.y + Math.sin(angle) * distance,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
         alpha: 0,
         scaleX: 0.25,
         scaleY: 0.25,

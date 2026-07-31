@@ -1,0 +1,174 @@
+
+dokkaebi-heavy-armored.png
+size: 1124, 396
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+arm
+  rotate: false
+  xy: 4, 4
+  size: 42, 54
+  orig: 42, 55
+  offset: 0, 1
+  index: -1
+attacked
+  rotate: false
+  xy: 689, 32
+  size: 195, 104
+  orig: 195, 104
+  offset: 0, 0
+  index: -1
+body
+  rotate: true
+  xy: 735, 150
+  size: 242, 139
+  orig: 242, 139
+  offset: 0, 0
+  index: -1
+body_armor
+  rotate: true
+  xy: 878, 205
+  size: 187, 148
+  orig: 187, 148
+  offset: 0, 0
+  index: -1
+die01
+  rotate: false
+  xy: 279, 71
+  size: 210, 321
+  orig: 210, 362
+  offset: 0, 21
+  index: -1
+die02
+  rotate: false
+  xy: 4, 62
+  size: 271, 330
+  orig: 271, 383
+  offset: 0, 27
+  index: -1
+eyes2_die
+  rotate: true
+  xy: 817, 10
+  size: 18, 13
+  orig: 19, 13
+  offset: 0, 0
+  index: -1
+eyes2_idle
+  rotate: true
+  xy: 1070, 286
+  size: 16, 15
+  orig: 16, 16
+  offset: 0, 1
+  index: -1
+eyes2_stun
+  rotate: true
+  xy: 689, 6
+  size: 22, 19
+  orig: 22, 19
+  offset: 0, 0
+  index: -1
+eyes_die
+  rotate: false
+  xy: 712, 10
+  size: 101, 18
+  orig: 101, 18
+  offset: 0, 0
+  index: -1
+eyes_idle
+  rotate: false
+  xy: 834, 12
+  size: 89, 16
+  orig: 89, 16
+  offset: 0, 0
+  index: -1
+eyes_stun
+  rotate: false
+  xy: 1002, 11
+  size: 99, 26
+  orig: 100, 26
+  offset: 0, 0
+  index: -1
+head
+  rotate: false
+  xy: 888, 41
+  size: 184, 160
+  orig: 184, 160
+  offset: 0, 0
+  index: -1
+head_armor
+  rotate: false
+  xy: 493, 6
+  size: 192, 130
+  orig: 192, 130
+  offset: 0, 0
+  index: -1
+leg_01
+  rotate: true
+  xy: 50, 5
+  size: 53, 86
+  orig: 53, 86
+  offset: 0, 0
+  index: -1
+leg_02
+  rotate: true
+  xy: 140, 5
+  size: 53, 86
+  orig: 53, 86
+  offset: 0, 0
+  index: -1
+leg_03
+  rotate: true
+  xy: 403, 20
+  size: 47, 86
+  orig: 47, 86
+  offset: 0, 0
+  index: -1
+leg_04
+  rotate: false
+  xy: 1070, 306
+  size: 47, 86
+  orig: 47, 86
+  offset: 0, 0
+  index: -1
+shoulder
+  rotate: true
+  xy: 961, 9
+  size: 28, 37
+  orig: 28, 37
+  offset: 0, 0
+  index: -1
+spawn
+  rotate: true
+  xy: 493, 140
+  size: 252, 238
+  orig: 252, 238
+  offset: 0, 0
+  index: -1
+spear
+  rotate: true
+  xy: 1030, 213
+  size: 179, 36
+  orig: 180, 36
+  offset: 0, 0
+  index: -1
+stun01
+  rotate: false
+  xy: 230, 6
+  size: 169, 52
+  orig: 170, 52
+  offset: 0, 0
+  index: -1
+stun02
+  rotate: true
+  xy: 927, 5
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1
+stun03
+  rotate: true
+  xy: 927, 5
+  size: 32, 30
+  orig: 32, 30
+  offset: 0, 0
+  index: -1

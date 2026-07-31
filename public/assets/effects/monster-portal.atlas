@@ -1,0 +1,27 @@
+
+monster-portal.png
+size: 236, 160
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+light
+  rotate: false
+  xy: 2, 4
+  size: 128, 151
+  orig: 200, 200
+  offset: 36, 46
+  index: -1
+light_square
+  rotate: false
+  xy: 132, 19
+  size: 100, 136
+  orig: 200, 200
+  offset: 50, 62
+  index: -1
+particle
+  rotate: true
+  xy: 132, 2
+  size: 15, 37
+  orig: 15, 38
+  offset: 0, 0
+  index: -1

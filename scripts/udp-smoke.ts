@@ -5,13 +5,37 @@ import {
   getLanBroadcastAddresses,
 } from '../electron/udp/networkTargets';
 import { createInitialAdaptiveDifficultyState, type GameSaveState } from '../src/game/types';
-import { UDP_MAX_PLAYERS, UDP_PROTOCOL_VERSION, type UdpBridgeEvent } from '../src/network/types';
+import {
+  PLAYER_LEAVE_GHOST_DURATION_MS,
+  UDP_MAX_PLAYERS,
+  UDP_PROTOCOL_VERSION,
+  type UdpBridgeEvent,
+} from '../src/network/types';
+import { isRuneStateEvent } from '../src/network/gameProtocol';
 import { HOST_SNAPSHOT_LIMITS } from '../src/network/HostSnapshotPublisher';
 import {
   formatOffscreenPlayerGroup,
   groupOffscreenIndicators,
   projectOffscreenTarget,
 } from '../src/ui/OffscreenIndicatorHud';
+
+assert.equal(UDP_PROTOCOL_VERSION, 7);
+assert.equal(PLAYER_LEAVE_GHOST_DURATION_MS, 3_000);
+const runeChallenge = {
+  event: 'challenge',
+  challenge: {
+    challengeId: 'rune-test', playerId: 'player-test', runeType: 'shield',
+    sequence: [0, 1, 2, 3], retryAt: 0,
+  },
+};
+assert.equal(isRuneStateEvent(runeChallenge), true);
+assert.equal(isRuneStateEvent({ event: 'progress', challengeId: 'rune-test', attempt: 0, index: 1 }), true);
+assert.equal(isRuneStateEvent({ event: 'progress', challengeId: 'rune-test', attempt: 0, index: 0 }), false);
+assert.equal(isRuneStateEvent({ ...runeChallenge, challenge: { ...runeChallenge.challenge, sequence: [4] } }), false);
+assert.equal(isRuneStateEvent({ event: 'retry', challengeId: '', attempt: 1, retryAt: Date.now() }), false);
+assert.equal(isRuneStateEvent({
+  event: 'complete', challengeId: 'rune-test', attempt: 0, index: 4,
+}), true);
 
 assert.equal(calculateDirectedBroadcastAddress('172.30.1.76', '255.255.255.0'), '172.30.1.255');
 assert.equal(calculateDirectedBroadcastAddress('10.23.45.67', '255.255.0.0'), '10.23.255.255');
@@ -57,14 +81,15 @@ const budgetSnapshot = {
     x: 1024, y: 1024, vx: 200, vy: 200, hp: 100000, maxHp: 100000,
     speed: 10000, level: 1000000, xp: 1000000000, xpToNext: 1000000000,
     alive: true, connected: true, shield: 10, hitRevision: 1000000,
+    success: true, successRevision: 1000000,
   })),
   enemies: Array.from({ length: HOST_SNAPSHOT_LIMITS.enemies }, (_, index) => ({
     id: `enemy-${index}`, type: 'compressed', frame: 17, x: 2048.5, y: 2048.5,
     vx: 999, vy: 999, hp: 100000000, maxHp: 100000000, scale: 5,
-    bossTier: 1000, hitRevision: 1000000,
+    bossTier: 1000, hitRevision: 1000000, portalSpawnEndsAt: Date.now() + 1_333,
   })),
   objects: Array.from({ length: HOST_SNAPSHOT_LIMITS.objects }, (_, index) => ({
-    id: `object-${index}`, texture: 'healthOrb', frame: 0, x: 2048.5, y: 2048.5,
+    id: `object-${index}`, texture: 'healthPotion', frame: 0, x: 2048.5, y: 2048.5,
     vx: 999, vy: 999, rotation: 6.28, scale: 5, kind: 'projectile',
   })),
   runes: [], auras: [], revives: [], removedEnemies: [], removedObjects: [], removedRunes: [],

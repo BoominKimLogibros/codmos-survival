@@ -1,6 +1,8 @@
 import { MAX_VISIBLE_HP_GRID_CELLS } from '../config/constants';
 import { createUiButton, createUiPanel, createUiToast, UI_COLORS, uiTextStyle } from '../ui/theme';
 import { WeaponStatusHud } from '../ui/WeaponStatusHud';
+import { shouldShowTouchControls } from '../ui/TouchJoystick';
+import { calculateExitButtonPosition } from '../ui/gameHudLayout';
 import type { UiButton, UiPanel, UiToast } from '../ui/theme';
 import type {
   PlayerStats,
@@ -57,6 +59,8 @@ export class GameHud {
   private exitModal?: Phaser.GameObjects.Container;
   private exitOverlay?: Phaser.GameObjects.Rectangle;
   private hpGridMax = 0;
+  private lastLayoutWidth = 0;
+  private lastLayoutHeight = 0;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -120,13 +124,20 @@ export class GameHud {
       fontStyle: '600',
     })).setOrigin(0.5).setScrollFactor(0).setDepth(103);
 
-    this.exitButton = createUiButton(scene, width - 70, height - 35, '나가기', {
+    const exitPosition = calculateExitButtonPosition(width, height, shouldShowTouchControls());
+    this.exitButton = createUiButton(
+      scene,
+      exitPosition.x,
+      exitPosition.y,
+      '나가기',
+      {
       width: 108,
       height: 42,
       fill: UI_COLORS.surfaceRaised,
       border: UI_COLORS.border,
       fontSize: '14px',
-    }).setScrollFactor(0).setDepth(300);
+      },
+    ).setScrollFactor(0).setDepth(300);
     this.exitButton.on('pointerdown', () => this.openExitModal());
     this.toast = createUiToast(scene, width / 2, height - 98, {
       width: Math.min(420, width - 30),
@@ -136,7 +147,10 @@ export class GameHud {
       getWeaponKeys: () => this.options.getStats().weapons,
       getWeapons: () => this.options.getWeapons(),
       getWeaponTooltip: (key) => this.options.getWeaponTooltip(key),
+      getStats: () => this.options.getStats(),
     });
+    this.lastLayoutWidth = width;
+    this.lastLayoutHeight = height;
 
     this.drawDividers();
     this.drawHpGrid();
@@ -147,6 +161,7 @@ export class GameHud {
   }
 
   update(): void {
+    this.syncToCurrentGameSize();
     const stats = this.options.getStats();
     const progress = this.options.getProgress();
     const hpRatio = Math.max(0, stats.hp / stats.maxHp);
@@ -164,6 +179,7 @@ export class GameHud {
     this.timerText.setText(`${minutes}:${seconds}`);
     this.killsText.setText(`처치 ${progress.killCount}`);
     if (this.hpGridMax !== stats.maxHp) this.drawHpGrid();
+    this.weaponStatusHud.update();
   }
 
   refreshWeaponIcons(): void {
@@ -274,7 +290,21 @@ export class GameHud {
 
   private handleResize(gameSize: Phaser.Structs.Size): void {
     this.weaponStatusHud.hideTooltip();
-    const { width, height } = gameSize;
+    this.applyResize(gameSize.width, gameSize.height);
+  }
+
+  private syncToCurrentGameSize(): void {
+    const { width, height } = this.scene.scale.gameSize;
+    if (width !== this.lastLayoutWidth || height !== this.lastLayoutHeight) {
+      this.applyResize(width, height);
+      return;
+    }
+    this.positionExitButton(width, height);
+  }
+
+  private applyResize(width: number, height: number): void {
+    this.lastLayoutWidth = width;
+    this.lastLayoutHeight = height;
     this.layout = this.calculateLayout(width);
     const hud = this.layout;
     this.panel.setPosition(hud.x, hud.y).resizeUiPanel(hud.panelWidth, hud.panelHeight);
@@ -286,7 +316,7 @@ export class GameHud {
     this.levelText.setPosition(hud.leftX, hud.y);
     this.timerText.setPosition(hud.rightX, hud.y - 10);
     this.killsText.setPosition(hud.rightX, hud.y + 12);
-    this.exitButton.setPosition(width - 70, height - 35);
+    this.positionExitButton(width, height);
     this.toast.setPosition(width / 2, height - 98);
     if (this.exitModal && this.exitOverlay) {
       this.exitModal.setPosition(width / 2, height / 2);
@@ -294,8 +324,13 @@ export class GameHud {
     }
     this.drawDividers();
     this.drawHpGrid();
-    this.update();
+  }
 
+  private positionExitButton(width: number, height: number): void {
+    const position = calculateExitButtonPosition(width, height, shouldShowTouchControls());
+    if (this.exitButton.x !== position.x || this.exitButton.y !== position.y) {
+      this.exitButton.setPosition(position.x, position.y);
+    }
   }
 
   private drawDividers(): void {

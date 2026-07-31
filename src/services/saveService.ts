@@ -6,6 +6,7 @@ import {
   ADAPTIVE_MIN_ACTIVE_TARGET,
   ADAPTIVE_MIN_BOSS_KILL_INTERVAL,
   ADAPTIVE_MIN_SPAWN_INTERVAL_MS,
+  ARENA_PLAYABLE_HALF_SIZE,
   BOSS_KILL_INTERVAL,
   COMPRESSED_SPAWN_INTERVAL_SECONDS,
   MAX_SAVE_FILE_SIZE,
@@ -13,7 +14,6 @@ import {
   SAVE_FORMAT,
   SAVE_VERSION,
   SAVE_WEAPON_MAX_LEVELS,
-  WORLD_SIZE,
 } from '../config/constants';
 import {
   createInitialAdaptiveDifficultyState,
@@ -242,7 +242,7 @@ export function normalizeSaveState(rawState: unknown): GameSaveState {
 
   const maxHp = readNumberOr(rawStats.maxHp, defaults.stats.maxHp, 1, 100000);
   const rawPlayer = isRecord(root.player) ? root.player : {};
-  const halfWorld = WORLD_SIZE / 2;
+  const halfWorld = ARENA_PLAYABLE_HALF_SIZE;
   const rawProgression = isRecord(root.progression) ? root.progression : {};
   const gameTime = readNumberOr(
     root.gameTime ?? root.time,

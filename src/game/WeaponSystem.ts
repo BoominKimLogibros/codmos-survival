@@ -1,7 +1,41 @@
 import type { PlayerController } from './PlayerController';
 import { MAX_WEAPON_LEVEL, MELEE_HIT_INTERVAL_MS, WORLD_SIZE } from '../config/constants';
 import { updateAuraPresentation } from '../objects/AuraPresentation';
-import { ExplosionPresentation, type ExplosionVisualData } from '../objects/ExplosionPresentation';
+import {
+  ExplosionPresentation,
+  type ExplosionPlayback,
+  type ExplosionVisualData,
+} from '../objects/ExplosionPresentation';
+import {
+  FLAG_ATTACK_TEXTURE_KEY,
+  FLAG_ATTACK_DURATION_MS,
+  FLAG_ATTACK_PEAK_HOLD_MS,
+  FLAG_COLLISION_RADIUS,
+  FLAG_PIVOT_OFFSET_Y,
+  FLAG_POLE_PIXEL_Y,
+  FLAG_SWING_EFFECT_KEY,
+  FLAG_SWING_EFFECT_PIVOT_Y,
+  FLAG_SWING_EFFECT_RADIUS,
+  FLAG_SWING_EFFECT_SIZE,
+  FLAG_TEXTURE_HEIGHT,
+  FLAG_TEXTURE_WIDTH,
+  flagDamagePoints,
+  flagEffectOriginX,
+  flagOriginX,
+  flagSwingAngle,
+  flagSwingDirection,
+  flagSwingEffectAlpha,
+} from '../objects/FlagPresentation';
+import {
+  EXPLOSION_KNOCKBACK_DURATION_MS,
+  EXPLOSION_KNOCKBACK_STRENGTH,
+  FLAG_KNOCKBACK_DURATION_MS,
+  FLAG_KNOCKBACK_STRENGTH,
+  ORBIT_KNOCKBACK_DURATION_MS,
+  ORBIT_KNOCKBACK_STRENGTH,
+  directionalKnockback,
+  radialKnockback,
+} from './knockback';
 import {
   createPlayerViewportBounds,
   EXPLOSION_FUSE_DURATION_MS,
@@ -13,6 +47,7 @@ import {
 import type {
   AudioEffects,
   DamageSprite,
+  EnemyKnockback,
   EnemySprite,
   WeaponDefinition,
   WeaponDefinitions,
@@ -23,20 +58,21 @@ import type {
 
 interface WeaponSystemOptions {
   getEnemies: () => EnemySprite[];
-  damageEnemy: (enemy: EnemySprite, damage: number) => void;
+  damageEnemy: (enemy: EnemySprite, damage: number, knockback?: EnemyKnockback) => void;
   effects: AudioEffects;
   onExplosion?: (effect: ExplosionVisualData) => void;
   ownerCenteredExplosionViewport?: boolean;
 }
 
 const ORBIT_ORB_DISPLAY_SIZE = 36;
-const ORBIT_ROTATION_SPEED = 0.003;
-const ORBIT_PER_RING = 9;
-const ORBIT_BASE_RADIUS = 70;
+export const ORBIT_ROTATION_SPEED = 0.0018;
+const ORBIT_PER_RING = 8;
+export const ORBIT_BASE_RADIUS = 70;
 const ORBIT_RING_GAP = 38;
 const BOLT_BURST_INTERVAL_MS = 45;
 export const BOLT_MAX_COUNT = 100;
-export const ORBIT_MAX_COUNT = 36;
+export const ORBIT_MAX_COUNT = 8;
+let nextWeaponSystemId = 1;
 
 export function calculateWeaponRuntimeStats(
   definition: WeaponDefinition,
@@ -45,7 +81,7 @@ export function calculateWeaponRuntimeStats(
   switch (definition.type) {
     case 'melee':
       return {
-        damage: definition.damage + 5 + upgrades * 9,
+        damage: 35 + upgrades * 12,
         cooldownMs: Math.max(720, definition.cooldown - Math.min(upgrades, 5) * 100),
         range: 62 + Math.min(upgrades, 6) * 16,
       };
@@ -80,7 +116,6 @@ export function calculateWeaponRuntimeStats(
         damage: definition.damage + 3 + damageGrowthLevels * 7,
         count,
         radius: ORBIT_BASE_RADIUS + (Math.ceil(count / ORBIT_PER_RING) - 1) * ORBIT_RING_GAP,
-        hitIntervalMs: MELEE_HIT_INTERVAL_MS,
       };
     }
   }
@@ -89,8 +124,8 @@ export function calculateWeaponRuntimeStats(
 export function createWeaponDefinitions(): WeaponDefinitions {
   return {
     whip: {
-      name: '채찍', desc: '레벨마다 피해가 계속 증가합니다', damage: 20, cooldown: 1200,
-      level: 1, maxLevel: null, type: 'melee', icon: 'whipIcon',
+      name: '깃발로 때리기', desc: '깃발을 좌우로 내려쳐 레벨마다 더 강한 피해를 줍니다', damage: 20, cooldown: 1200,
+      level: 1, maxLevel: null, type: 'melee', icon: 'flag',
     },
     bolt: {
       name: '번개', desc: '전기 화살을 연사하며 100발 이후 피해가 증가합니다', damage: 15, cooldown: 900,
@@ -105,8 +140,8 @@ export function createWeaponDefinitions(): WeaponDefinitions {
       level: 1, maxLevel: null, type: 'explosion', icon: 'dynamite', radius: 50,
     },
     shield: {
-      name: '회전 구체', desc: '최대 36개까지 늘어나고 이후 피해가 증가합니다', damage: 12, cooldown: 300,
-      level: 1, maxLevel: null, type: 'orbit', icon: 'orbitOrb', count: 2,
+      name: '회전 구체', desc: '최대 8개까지 늘어나고 이후 피해가 증가합니다', damage: 12, cooldown: 300,
+      level: 1, maxLevel: null, type: 'orbit', icon: 'orbitOrb', count: 1,
     },
   };
 }
@@ -171,7 +206,7 @@ export function buildWeaponTooltipData(definition: WeaponDefinition): WeaponTool
           { label: '접촉 피해', value: `${runtime.damage}` },
           { label: '구체 수', value: `${runtime.count}개 / 최대 ${ORBIT_MAX_COUNT}개` },
           { label: '공전 반경', value: `${runtime.radius}` },
-          { label: '피해 간격', value: seconds(runtime.hitIntervalMs!) },
+          { label: '피해 방식', value: '구체별 접촉 1회' },
         ],
       };
   }
@@ -184,7 +219,7 @@ export function applyWeaponDefinitionLevels(
   (Object.keys(definitions) as WeaponKey[]).forEach((key) => {
     const level = levels[key];
     definitions[key].level = Number.isFinite(level)
-      ? Phaser.Math.Clamp(Math.floor(level), 1, MAX_WEAPON_LEVEL)
+      ? Math.max(1, Math.min(MAX_WEAPON_LEVEL, Math.floor(level)))
       : 1;
   });
 }
@@ -209,6 +244,10 @@ export class WeaponSystem {
   private orbitRotation = 0;
   private readonly auraSprite: Phaser.GameObjects.Image;
   private ownerActive = true;
+  private attackGeneration = 0;
+  private readonly activeExplosions = new Set<ExplosionPlayback>();
+  private readonly damageSourcePrefix = `weapon-${nextWeaponSystemId++}`;
+  private destroyed = false;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -218,22 +257,24 @@ export class WeaponSystem {
     this.projectiles = scene.physics.add.group({ maxSize: 300 });
     this.meleeHits = scene.physics.add.group();
     this.auraSprite = scene.add.image(0, 0, 'aura').setAlpha(0).setDepth(4).setVisible(false);
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
   }
 
   update(delta: number): void {
     if (!this.ownerActive) return;
-    this.player.stats.weapons.forEach((key) => {
+    for (const key of this.player.stats.weapons) {
+      if (!this.ownerActive) break;
       const definition = this.definitions[key];
       const runtime = calculateWeaponRuntimeStats(definition);
-      if (definition.type === 'orbit') return;
-      if (key === 'bolt' && this.boltBurstTimer) return;
+      if (definition.type === 'orbit') continue;
+      if (key === 'bolt' && this.boltBurstTimer) continue;
       const cooldownMs = runtime.cooldownMs!;
       if (key === 'explosion' && this.explosionActive) {
         this.cooldowns.explosion = Math.min(
           this.cooldowns.explosion + delta,
           cooldownMs,
         );
-        return;
+        continue;
       }
       this.cooldowns[key] = Math.min(
         this.cooldowns[key] + delta,
@@ -243,7 +284,9 @@ export class WeaponSystem {
         this.cooldowns[key] -= cooldownMs;
         this.fire(definition);
       }
-    });
+    }
+
+    if (!this.ownerActive) return;
 
     if (this.player.stats.weapons.includes('aura')) {
       const aura = this.definitions.aura;
@@ -284,6 +327,22 @@ export class WeaponSystem {
     };
   }
 
+  get canLinkOrbit(): boolean {
+    return this.ownerActive &&
+      this.player.stats.hp > 0 &&
+      this.player.sprite.active &&
+      this.player.stats.weapons.includes('shield') &&
+      this.orbitShields.some((shield) => shield.active);
+  }
+
+  get orbitOwnerPosition(): { x: number; y: number } {
+    return { x: this.player.sprite.x, y: this.player.sprite.y };
+  }
+
+  getActiveOrbitShields(): DamageSprite[] {
+    return this.orbitShields.filter((shield) => shield.active);
+  }
+
   setOwnerActive(active: boolean): void {
     this.ownerActive = active;
     if (!active) {
@@ -300,6 +359,47 @@ export class WeaponSystem {
     }
   }
 
+  pauseForBossSuccess(): void {
+    if (this.destroyed) return;
+    this.attackGeneration++;
+    this.setOwnerActive(false);
+    this.explosionActive = false;
+    this.activeExplosions.forEach((playback) => playback.cancel());
+    this.activeExplosions.clear();
+
+    [...this.projectiles.getChildren() as Phaser.Physics.Arcade.Sprite[]].forEach((projectile) => {
+      this.scene.tweens.killTweensOf(projectile);
+      projectile.destroy();
+    });
+    const orbitSet = new Set<DamageSprite>(this.orbitShields);
+    [...this.meleeHits.getChildren() as DamageSprite[]].forEach((hit) => {
+      if (orbitSet.has(hit)) return;
+      this.scene.tweens.killTweensOf(hit);
+      hit.destroy();
+    });
+  }
+
+  resumeAfterBossSuccess(): void {
+    if (this.destroyed || this.player.stats.hp <= 0 || !this.player.sprite.active) return;
+    this.setOwnerActive(true);
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.attackGeneration++;
+    this.cancelBoltBurst();
+    this.activeExplosions.forEach((playback) => playback.cancel());
+    this.activeExplosions.clear();
+    this.auraSprite.destroy();
+    this.orbitShields.forEach((shield) => shield.destroy());
+    this.orbitShields.length = 0;
+    // Phaser may destroy scene-owned groups before the SHUTDOWN callback runs.
+    // A second clear then dereferences the group's already released child set.
+    if (this.projectiles.children) this.projectiles.clear(true, true);
+    if (this.meleeHits.children) this.meleeHits.clear(true, true);
+  }
+
   getTooltipData(key: WeaponKey): WeaponTooltipData {
     return buildWeaponTooltipData(this.definitions[key]);
   }
@@ -313,7 +413,7 @@ export class WeaponSystem {
 
   private fire(definition: WeaponDefinition): void {
     switch (definition.type) {
-      case 'melee': this.fireWhip(definition); break;
+      case 'melee': this.fireFlag(definition); break;
       case 'projectile': this.fireBolt(definition); break;
       case 'aura': this.fireAura(definition); break;
       case 'explosion': this.fireExplosion(definition); break;
@@ -321,34 +421,121 @@ export class WeaponSystem {
     }
   }
 
-  private fireWhip(definition: WeaponDefinition): void {
-    const direction = this.player.isFacingRight ? 1 : -1;
+  private fireFlag(definition: WeaponDefinition): void {
+    const direction: 1 | -1 = this.player.isFacingRight ? 1 : -1;
     const runtime = calculateWeaponRuntimeStats(definition);
     const range = runtime.range!;
-    const slashScale = 0.7 + Math.min(definition.level, 8) * 0.1;
-    const hit = this.scene.physics.add.sprite(
-      this.player.sprite.x + direction * range,
-      this.player.sprite.y,
-      'whipSlash',
+    const pivotY = this.player.sprite.y + FLAG_PIVOT_OFFSET_Y;
+    const flag = this.scene.physics.add.sprite(
+      this.player.sprite.x,
+      pivotY,
+      FLAG_ATTACK_TEXTURE_KEY,
     ) as DamageSprite;
-    hit.setDepth(6).setAlpha(0.95).setScale(slashScale);
-    if (direction < 0) hit.setFlipX(true);
-    const body = hit.body as Phaser.Physics.Arcade.Body;
-    body.setSize(160, 80);
-    body.setOffset(0, 0);
-    hit.damage = runtime.damage;
-    this.meleeHits.add(hit);
+    flag.setDepth(6)
+      .setOrigin(flagOriginX(direction), FLAG_POLE_PIXEL_Y / FLAG_TEXTURE_HEIGHT)
+      .setFlipX(direction < 0)
+      .setRotation(flagSwingAngle(direction, 0));
+    flag.damage = 0;
+    flag.presentationOnly = true;
+    this.meleeHits.add(flag);
+    (flag.body as Phaser.Physics.Arcade.Body).enable = false;
+
+    const strikeEffect = this.scene.physics.add.sprite(
+      this.player.sprite.x,
+      pivotY,
+      FLAG_SWING_EFFECT_KEY,
+    ) as DamageSprite;
+    const effectScale = range / FLAG_SWING_EFFECT_RADIUS;
+    strikeEffect.setDepth(5.8)
+      .setOrigin(flagEffectOriginX(direction), FLAG_SWING_EFFECT_PIVOT_Y / FLAG_SWING_EFFECT_SIZE)
+      .setFlipX(direction < 0)
+      .setScale(effectScale)
+      .setAlpha(0);
+    strikeEffect.damage = 0;
+    strikeEffect.presentationOnly = true;
+    this.meleeHits.add(strikeEffect);
+    (strikeEffect.body as Phaser.Physics.Arcade.Body).enable = false;
+
+    const initialDamagePoints = flagDamagePoints(
+      this.player.sprite.x,
+      this.player.sprite.y,
+      direction,
+      range,
+      0,
+    );
+    const damageSourceId = `${this.damageSourcePrefix}:whip`;
+    const initialSwingDirection = flagSwingDirection(direction, 0);
+    const hits = initialDamagePoints.map((point) => {
+      const hit = this.scene.physics.add.sprite(
+        point.x,
+        point.y,
+        FLAG_ATTACK_TEXTURE_KEY,
+      ) as DamageSprite;
+      hit.setVisible(false);
+      const body = hit.body as Phaser.Physics.Arcade.Body;
+      body.setCircle(
+        FLAG_COLLISION_RADIUS,
+        FLAG_TEXTURE_WIDTH / 2 - FLAG_COLLISION_RADIUS,
+        FLAG_TEXTURE_HEIGHT / 2 - FLAG_COLLISION_RADIUS,
+      );
+      hit.damage = runtime.damage;
+      // Every sample belongs to one swing, so overlapping samples cannot deal
+      // duplicate damage to the same monster.
+      hit.damageSourceId = damageSourceId;
+      hit.hitIntervalMs = MELEE_HIT_INTERVAL_MS;
+      hit.knockback = directionalKnockback(
+        initialSwingDirection.x,
+        initialSwingDirection.y,
+        FLAG_KNOCKBACK_STRENGTH,
+        FLAG_KNOCKBACK_DURATION_MS,
+      );
+      hit.networkHidden = true;
+      this.meleeHits.add(hit);
+      return hit;
+    });
+
     this.options.effects.spring.play();
-    hit.setAngle(direction > 0 ? -15 : 15);
+    const animationState = { progress: 0 };
     this.scene.tweens.add({
-      targets: hit,
-      angle: direction > 0 ? 15 : -15,
-      alpha: { from: 0.95, to: 0 },
-      scaleX: slashScale * 1.3,
-      scaleY: slashScale * 0.6,
-      duration: 350,
+      targets: animationState,
+      progress: 1,
+      duration: FLAG_ATTACK_DURATION_MS,
+      hold: FLAG_ATTACK_PEAK_HOLD_MS,
       ease: 'Cubic.easeOut',
-      onComplete: () => hit.destroy(),
+      onUpdate: () => {
+        if (!flag.active || hits.every((hit) => !hit.active)) return;
+        const pivotX = this.player.sprite.x;
+        const currentPivotY = this.player.sprite.y + FLAG_PIVOT_OFFSET_Y;
+        const angle = flagSwingAngle(direction, animationState.progress);
+        const swingDirection = flagSwingDirection(direction, animationState.progress);
+        const damagePoints = flagDamagePoints(
+          pivotX,
+          this.player.sprite.y,
+          direction,
+          range,
+          animationState.progress,
+        );
+        flag.setPosition(pivotX, currentPivotY).setRotation(angle);
+        hits.forEach((hit, index) => {
+          if (!hit.active) return;
+          hit.setPosition(damagePoints[index].x, damagePoints[index].y);
+          hit.knockback = directionalKnockback(
+            swingDirection.x,
+            swingDirection.y,
+            FLAG_KNOCKBACK_STRENGTH,
+            FLAG_KNOCKBACK_DURATION_MS,
+          );
+        });
+        if (strikeEffect.active) {
+          strikeEffect.setPosition(pivotX, currentPivotY)
+            .setAlpha(flagSwingEffectAlpha(animationState.progress));
+        }
+      },
+      onComplete: () => {
+        flag.destroy();
+        hits.forEach((hit) => hit.destroy());
+        strikeEffect.destroy();
+      },
     });
   }
 
@@ -422,6 +609,7 @@ export class WeaponSystem {
     const runtime = calculateWeaponRuntimeStats(definition);
     const radiusSquared = runtime.radius! * runtime.radius!;
     this.options.getEnemies().forEach((enemy) => {
+      if (!this.ownerActive) return;
       if (Phaser.Math.Distance.Squared(
         this.player.sprite.x,
         this.player.sprite.y,
@@ -461,6 +649,7 @@ export class WeaponSystem {
     }
     if (targetPoints.length > 0) this.options.effects.bomb.play();
     this.explosionActive = true;
+    const attackGeneration = this.attackGeneration;
 
     targetPoints.forEach(({ x: targetX, y: targetY }) => {
       const startX = this.player.sprite.x;
@@ -479,15 +668,31 @@ export class WeaponSystem {
         flightDurationMs,
         fuseDurationMs: EXPLOSION_FUSE_DURATION_MS,
       };
-      ExplosionPresentation.play(this.scene, effect, () => {
+      let playback: ExplosionPlayback;
+      playback = ExplosionPresentation.play(this.scene, effect, () => {
+        this.activeExplosions.delete(playback);
         this.explosionActive = false;
+        if (!this.ownerActive || attackGeneration !== this.attackGeneration) return;
         this.options.getEnemies().forEach((enemy) => {
+          if (!this.ownerActive || attackGeneration !== this.attackGeneration) return;
           if (Phaser.Math.Distance.Between(targetX, targetY, enemy.x, enemy.y) <= radius) {
-            this.options.damageEnemy(enemy, runtime.damage);
+            this.options.damageEnemy(
+              enemy,
+              runtime.damage,
+              radialKnockback(
+                targetX,
+                targetY,
+                enemy.x,
+                enemy.y,
+                EXPLOSION_KNOCKBACK_STRENGTH,
+                EXPLOSION_KNOCKBACK_DURATION_MS,
+              ),
+            );
           }
         });
         this.options.effects.explosion.play();
       });
+      this.activeExplosions.add(playback);
       this.options.onExplosion?.(effect);
     });
   }
@@ -525,6 +730,14 @@ export class WeaponSystem {
       shield.setDepth(6).setDisplaySize(ORBIT_ORB_DISPLAY_SIZE, ORBIT_ORB_DISPLAY_SIZE);
       (shield.body as Phaser.Physics.Arcade.Body).setCircle(27, 5, 5);
       shield.damage = runtime.damage;
+      shield.damageSourceId = `${this.damageSourcePrefix}:orbit:${this.orbitShields.length}`;
+      shield.hitMode = 'contact';
+      shield.knockback = directionalKnockback(
+        0,
+        1,
+        ORBIT_KNOCKBACK_STRENGTH,
+        ORBIT_KNOCKBACK_DURATION_MS,
+      );
       this.meleeHits.add(shield);
       this.orbitShields.push(shield);
     }
@@ -560,6 +773,12 @@ export class WeaponSystem {
       shield.setPosition(
         this.player.sprite.x + Math.cos(angle) * radius,
         this.player.sprite.y + Math.sin(angle) * radius,
+      );
+      shield.knockback = directionalKnockback(
+        -Math.sin(angle),
+        Math.cos(angle),
+        ORBIT_KNOCKBACK_STRENGTH,
+        ORBIT_KNOCKBACK_DURATION_MS,
       );
       shield.setRotation(this.orbitRotation * 2 + angle);
       shield.damage = runtime.damage;

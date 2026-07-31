@@ -4,6 +4,7 @@ interface GameOverModalOptions {
   time: number;
   kills: number;
   level: number;
+  penalty?: string;
   onRetry: () => void;
   onMenu: () => void;
 }
@@ -47,10 +48,11 @@ export class GameOverModal {
       `${minutes}:${seconds}  ·  LV ${options.level}  ·  처치 ${options.kills}`,
       uiTextStyle({ color: '#d4d7de', fontSize: '13px', fontStyle: '800' }),
     ).setOrigin(0.5);
-    const guide = scene.add.text(0, -15, '방향키로 맵을 둘러볼 수 있습니다.', uiTextStyle({
+    const guide = scene.add.text(0, -15, options.penalty ?? '방향키로 맵을 둘러볼 수 있습니다.', uiTextStyle({
       color: '#a7acb7',
-      fontSize: '12px',
+      fontSize: '11px',
       fontStyle: '600',
+      wordWrap: { width: PANEL_WIDTH - 34, useAdvancedWrap: true },
     })).setOrigin(0.5);
     const retry = createUiButton(scene, -84, 54, '다시하기', {
       width: 150,

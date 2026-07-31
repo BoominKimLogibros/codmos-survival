@@ -81,15 +81,16 @@ export class GameOverScene extends Phaser.Scene {
       })).setOrigin(0.5),
     ]);
 
-    // Score display using CDN number images
+    // Render the score directly so the result screen does not depend on legacy digit sprites.
     const score = this.kills * 10 + this.survivalTime * 5 + this.level * 100;
     this.gameOverContent.add(this.add.text(0, 4, '점수', uiTextStyle({
       fontSize: '16px', color: '#a7acb7', fontStyle: '600',
     })).setOrigin(0.5));
-    const ss = String(score), nw = 28, startX = -(ss.length * nw) / 2 + nw / 2;
-    for (let i = 0; i < ss.length; i++) {
-      this.gameOverContent.add(this.add.image(startX + i * nw, 50, 'number' + ss[i]).setScale(0.5));
-    }
+    this.gameOverContent.add(this.add.text(0, 50, score.toLocaleString('ko-KR'), {
+      ...uiTextStyle({ fontSize: '38px', fontStyle: '800' }),
+      stroke: '#0b0d12',
+      strokeThickness: 2,
+    }).setOrigin(0.5));
 
     const retry = createUiButton(this, 0, 154, '다시하기', {
       width: 240, height: 52, fill: UI_COLORS.primary, border: UI_COLORS.primary,

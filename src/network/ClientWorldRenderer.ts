@@ -1,14 +1,19 @@
 import { PlayerController } from '../game/PlayerController';
+import { runeTextureKey, type RuneDropPhase } from '../game/runeDrop';
 import type { PlayerStats } from '../game/types';
 import { ExplosionPresentation } from '../objects/ExplosionPresentation';
+import { DeathMarker } from '../objects/DeathMarker';
 import { updateAuraPresentation } from '../objects/AuraPresentation';
 import { BossPresentation } from '../objects/BossPresentation';
 import { MultiAttackPresentation } from '../objects/MultiAttackPresentation';
+import { MonsterPortalPresentation } from '../objects/MonsterPortalPresentation';
 import { PlayerStatusPresentation } from '../objects/PlayerStatusPresentation';
 import { ReviveMarker } from '../objects/ReviveMarker';
 import { ShieldPresentation } from '../objects/ShieldPresentation';
+import { shouldShowReviveMarker } from '../game/revive';
 import { UI_COLORS, uiTextStyle } from '../ui/theme';
 import { isCombatEffectPayload } from './gameProtocol';
+import { PLAYER_LEAVE_GHOST_DURATION_MS } from './types';
 import type {
   NetEnemyState,
   NetAuraState,
@@ -28,16 +33,20 @@ interface PlayerView {
   targetAt: number;
   defeated: boolean;
   hitRevision: number;
+  success: boolean;
+  successRevision: number;
 }
 
 interface EnemyView {
   sprite: Phaser.GameObjects.Sprite;
   presentation: BossPresentation | null;
-  hpBg: Phaser.GameObjects.Rectangle;
-  hpBar: Phaser.GameObjects.Rectangle;
+  spawnPresentation: MonsterPortalPresentation | null;
+  hpBg: Phaser.GameObjects.Rectangle | null;
+  hpBar: Phaser.GameObjects.Rectangle | null;
   target: NetEnemyState;
   targetAt: number;
   hitRevision: number;
+  spawnReadyAt: number;
 }
 
 interface ObjectView {
@@ -48,6 +57,7 @@ interface ObjectView {
 
 interface RuneView {
   sprite: Phaser.GameObjects.Sprite;
+  phase: RuneDropPhase;
   gaugeBackground: Phaser.GameObjects.Rectangle;
   gaugeFill: Phaser.GameObjects.Rectangle;
 }
@@ -66,11 +76,13 @@ export class ClientWorldRenderer {
   private readonly runes = new Map<string, RuneView>();
   private readonly auras = new Map<string, AuraView>();
   private readonly revives = new Map<string, ReviveMarker>();
+  private readonly knownReviveIds = new Set<string>();
   private readonly canonicalEnemies = new Map<string, NetEnemyState>();
   private readonly canonicalObjects = new Map<string, NetObjectState>();
   private readonly canonicalRunes = new Map<string, NetRuneState>();
   private latestPlayers: NetPlayerState[] = [];
   private latestProgress = { gameTime: 0, killCount: 0, normalGeneration: 1, bossGeneration: 0 };
+  private readonly playerRemovalTimers = new Map<string, Phaser.Time.TimerEvent>();
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -104,7 +116,10 @@ export class ClientWorldRenderer {
     snapshot.removedEnemies.forEach((id) => this.destroyEnemy(id, true));
     snapshot.removedObjects.forEach((id) => this.destroyObject(id));
     snapshot.removedRunes.forEach((id) => this.destroyRune(id));
-    snapshot.enemies.forEach((state) => { this.canonicalEnemies.set(state.id, state); this.upsertEnemy(state); });
+    snapshot.enemies.forEach((state) => {
+      this.canonicalEnemies.set(state.id, state);
+      this.upsertEnemy(state, snapshot.serverTime);
+    });
     snapshot.objects.forEach((state) => { this.canonicalObjects.set(state.id, state); this.upsertObject(state); });
     snapshot.runes.forEach((state) => { this.canonicalRunes.set(state.id, state); this.upsertRune(state); });
     this.syncAuras(snapshot.auras ?? []);
@@ -164,14 +179,25 @@ export class ClientWorldRenderer {
       view.sprite.setFlipX(state.vx < 0);
       view.presentation?.sync(view.sprite.x, view.sprite.y, state.vx < 0);
       const visible = this.inCamera(view.sprite.x, view.sprite.y, CLIENT_RENDER_MARGIN);
-      view.sprite.setVisible(visible);
-      view.hpBg.setVisible(visible);
-      view.hpBar.setVisible(visible);
+      const bossReady = state.type !== 'boss' || (state.bossSpawnRemainingMs ?? 0) <= 0;
+      const monsterReady = state.type === 'boss' || now >= view.spawnReadyAt;
+      view.sprite.setVisible(
+        visible && monsterReady && (Boolean(view.presentation) || bossReady),
+      );
+      view.presentation?.setVisible(visible);
+      view.spawnPresentation?.sync(view.sprite.x, view.sprite.y);
+      view.spawnPresentation?.setVisible(visible);
+      view.hpBg?.setVisible(visible && bossReady);
+      view.hpBar?.setVisible(visible && bossReady);
       if (!visible) continue;
-      const width = Math.max(42, Math.min(120, state.maxHp / 3));
-      const ratio = Math.max(0, state.hp / Math.max(1, state.maxHp));
-      view.hpBg.setPosition(view.sprite.x, view.sprite.y - view.sprite.displayHeight / 2 - 9).setDisplaySize(width, 6);
-      view.hpBar.setPosition(view.sprite.x - width / 2, view.hpBg.y).setDisplaySize(Math.max(1, width * ratio), 4);
+      if (view.hpBg && view.hpBar) {
+        const width = Math.max(42, Math.min(120, state.maxHp / 3));
+        const ratio = Math.max(0, state.hp / Math.max(1, state.maxHp));
+        view.hpBg.setPosition(view.sprite.x, view.sprite.y - view.sprite.displayHeight / 2 - 9)
+          .setDisplaySize(width, 6);
+        view.hpBar.setPosition(view.sprite.x - width / 2, view.hpBg.y)
+          .setDisplaySize(Math.max(1, width * ratio), 4);
+      }
     }
     for (const view of this.objects.values()) {
       const state = view.target;
@@ -180,7 +206,12 @@ export class ClientWorldRenderer {
       const targetY = state.y + (state.vy ?? 0) * ageSeconds;
       view.sprite.x = Phaser.Math.Linear(view.sprite.x, targetX, fastBlend);
       view.sprite.y = Phaser.Math.Linear(view.sprite.y, targetY, fastBlend);
-      view.sprite.setRotation(state.rotation ?? 0).setScale(state.scale ?? 1);
+      view.sprite.setRotation(state.rotation ?? 0)
+        .setScale(state.scale ?? 1, state.scaleY ?? state.scale ?? 1)
+        .setFlipX(state.flipX ?? false)
+        .setOrigin(state.originX ?? 0.5, state.originY ?? 0.5)
+        .setAlpha(state.alpha ?? 1)
+        .setDepth(state.depth ?? (state.kind === 'projectile' ? 6 : 2));
       view.sprite.setVisible(this.inCamera(view.sprite.x, view.sprite.y, CLIENT_RENDER_MARGIN));
     }
   }
@@ -188,8 +219,16 @@ export class ClientWorldRenderer {
   playMultiAttack(playerId: string): void {
     const player = this.players.get(playerId)?.controller;
     if (!player) return;
+    const targets = [...this.enemies.values()]
+      .filter((view) => view.sprite.active)
+      .map((view) => ({
+        get active() { return view.sprite.active; },
+        get x() { return view.sprite.x; },
+        get y() { return view.sprite.y; },
+        enemyType: view.target.type,
+      }));
     MultiAttackPresentation.play(this.scene, player.sprite.x, player.sprite.y, {
-      targets: [],
+      targets,
       onImpact: () => undefined,
     });
   }
@@ -199,9 +238,52 @@ export class ClientWorldRenderer {
     ExplosionPresentation.play(this.scene, effect, onImpact);
   }
 
+  markPlayerLeft(playerId: string, delayMs = PLAYER_LEAVE_GHOST_DURATION_MS): void {
+    if (this.playerRemovalTimers.has(playerId)) return;
+    const view = this.players.get(playerId);
+    if (view?.target) {
+      view.target = {
+        ...view.target,
+        alive: false,
+        connected: false,
+        hp: 0,
+        vx: 0,
+        vy: 0,
+      };
+    }
+    if (view) {
+      view.controller.stats.hp = 0;
+      if (!view.defeated) {
+        view.defeated = true;
+        view.controller.enterDefeatedState('departure');
+      }
+      view.status.update({
+        name: view.target?.name ?? '플레이어',
+        level: view.target?.level ?? view.controller.stats.level,
+        hp: 0,
+        maxHp: view.target?.maxHp ?? view.controller.stats.maxHp,
+        xp: view.target?.xp ?? view.controller.stats.xp,
+        xpToNext: view.target?.xpToNext ?? view.controller.stats.xpToNext,
+        status: '이탈',
+      });
+      view.shield.setVisible(false);
+      view.shieldPresentation?.destroy(false);
+      view.shieldPresentation = null;
+    }
+    this.auras.get(playerId)?.sprite.destroy();
+    this.auras.delete(playerId);
+    this.revives.get(playerId)?.destroy();
+    this.revives.delete(playerId);
+    this.knownReviveIds.delete(playerId);
+    const timer = this.scene.time.delayedCall(delayMs, () => this.destroyPlayer(playerId));
+    this.playerRemovalTimers.set(playerId, timer);
+  }
+
   destroy(): void {
+    this.playerRemovalTimers.forEach((timer) => timer.remove(false));
+    this.playerRemovalTimers.clear();
     this.players.forEach((view) => {
-      view.controller.sprite.destroy();
+      view.controller.destroy();
       view.status.destroy();
       view.shield.destroy();
       view.shieldPresentation?.destroy(false);
@@ -209,8 +291,8 @@ export class ClientWorldRenderer {
     this.enemies.forEach((view) => {
       view.presentation?.destroy(false);
       view.sprite.destroy();
-      view.hpBg.destroy();
-      view.hpBar.destroy();
+      view.hpBg?.destroy();
+      view.hpBar?.destroy();
     });
     this.objects.forEach((view) => view.sprite.destroy());
     this.runes.forEach((rune) => {
@@ -220,9 +302,11 @@ export class ClientWorldRenderer {
     });
     this.auras.forEach((aura) => aura.sprite.destroy());
     this.revives.forEach((revive) => revive.destroy());
+    this.knownReviveIds.clear();
   }
 
   private queuePlayer(state: NetPlayerState): void {
+    if (this.playerRemovalTimers.has(state.id)) return;
     let view = this.players.get(state.id);
     if (!view) {
       const controller = new PlayerController(this.scene, {
@@ -255,6 +339,8 @@ export class ClientWorldRenderer {
         targetAt: performance.now(),
         defeated: false,
         hitRevision: state.hitRevision,
+        success: false,
+        successRevision: 0,
       };
       this.players.set(state.id, view);
     }
@@ -284,11 +370,20 @@ export class ClientWorldRenderer {
     this.syncShieldPresentation(view, state);
     if (!state.alive && !view.defeated) {
       view.defeated = true;
-      view.controller.enterDefeatedState();
+      view.controller.enterDefeatedState(state.connected ? 'death' : 'departure');
     } else if (state.alive && view.defeated) {
       view.defeated = false;
       view.controller.reviveAt(state.x, state.y, state.hp);
     }
+    if (state.alive && state.success && (
+      !view.success || state.successRevision > view.successRevision
+    )) {
+      view.controller.enterBossSuccessState();
+    } else if ((!state.alive || !state.success) && view.success) {
+      view.controller.exitBossSuccessState(false);
+    }
+    view.success = state.alive && state.success;
+    view.successRevision = Math.max(view.successRevision, state.successRevision);
   }
 
   private syncShieldPresentation(view: PlayerView, state: NetPlayerState): void {
@@ -339,13 +434,23 @@ export class ClientWorldRenderer {
 
   private syncRevives(states: NetReviveState[]): void {
     const activeIds = new Set(states.map((state) => state.playerId));
-    for (const [playerId, revive] of this.revives) {
+    for (const playerId of this.knownReviveIds) {
       if (activeIds.has(playerId)) continue;
+      this.knownReviveIds.delete(playerId);
+    }
+    for (const [playerId, revive] of this.revives) {
+      const state = states.find((candidate) => candidate.playerId === playerId);
+      if (state && shouldShowReviveMarker(state.chargingPlayerId)) continue;
       revive.destroy();
       this.revives.delete(playerId);
     }
     states.forEach((state) => {
       const playerName = this.latestPlayers.find((player) => player.id === state.playerId)?.name ?? '플레이어';
+      if (!this.knownReviveIds.has(state.playerId)) {
+        this.knownReviveIds.add(state.playerId);
+        new DeathMarker(this.scene, state.x, state.y);
+      }
+      if (!shouldShowReviveMarker(state.chargingPlayerId)) return;
       let revive = this.revives.get(state.playerId);
       if (!revive) {
         revive = new ReviveMarker(this.scene, state.x, state.y, playerName);
@@ -356,13 +461,19 @@ export class ClientWorldRenderer {
     });
   }
 
-  private upsertEnemy(state: NetEnemyState): void {
+  private upsertEnemy(state: NetEnemyState, serverTime: number): void {
     let view = this.enemies.get(state.id);
     if (!view) {
       const sprite = this.scene.add.sprite(state.x, state.y, 'monsterSheet', state.frame)
         .setScale(state.scale).setDepth(4);
       const presentation = state.type === 'boss'
-        ? BossPresentation.create(this.scene, state.x, state.y, Math.max(1, state.bossTier))
+        ? BossPresentation.create(
+          this.scene,
+          state.x,
+          state.y,
+          Math.max(1, state.bossTier),
+          state.bossSpawnRemainingMs ?? 0,
+        )
         : null;
       if (presentation) {
         // Keep the Arcade-compatible sprite as an invisible network/HP anchor.
@@ -370,29 +481,71 @@ export class ClientWorldRenderer {
       } else {
         this.restoreEnemyTint(sprite, state.type);
       }
-      const hpBg = this.scene.add.rectangle(state.x, state.y, 40, 6, UI_COLORS.panelDeep).setDepth(25);
-      const hpBar = this.scene.add.rectangle(state.x, state.y, 40, 4, UI_COLORS.primary).setOrigin(0, 0.5).setDepth(26);
+      const hpBg = state.type === 'boss'
+        ? this.scene.add.rectangle(state.x, state.y, 40, 6, UI_COLORS.panelDeep).setDepth(25)
+        : null;
+      const hpBar = state.type === 'boss'
+        ? this.scene.add.rectangle(state.x, state.y, 40, 4, UI_COLORS.primary)
+          .setOrigin(0, 0.5).setDepth(26)
+        : null;
       view = {
         sprite,
         presentation,
+        spawnPresentation: null,
         hpBg,
         hpBar,
         target: state,
         targetAt: performance.now(),
         hitRevision: state.hitRevision,
+        spawnReadyAt: 0,
       };
       this.enemies.set(state.id, view);
     }
+    const portalRemainingMs = state.type === 'boss'
+      ? 0
+      : Math.max(0, (state.portalSpawnEndsAt ?? 0) - serverTime);
+    view.spawnReadyAt = portalRemainingMs > 0
+      ? performance.now() + portalRemainingMs
+      : 0;
+    if (
+      portalRemainingMs > 0 &&
+      !view.spawnPresentation &&
+      this.inCamera(state.x, state.y, CLIENT_RENDER_MARGIN)
+    ) {
+      view.spawnPresentation = MonsterPortalPresentation.create(
+        this.scene,
+        state.x,
+        state.y,
+        {
+          texture: 'monsterSheet',
+          frame: state.frame,
+          scale: state.scale,
+          tint: state.type === 'compressed' ? 0xff8a65 : undefined,
+        },
+        portalRemainingMs,
+      );
+    } else if (portalRemainingMs <= 0 && view.spawnPresentation) {
+      view.spawnPresentation.destroy();
+      view.spawnPresentation = null;
+    }
     if (state.hitRevision > view.hitRevision) {
+      const previousRevision = view.hitRevision;
       view.hitRevision = state.hitRevision;
-      this.showEnemyHitFeedback(view, state.type, state.hitRevision);
+      for (let revision = previousRevision + 1; revision <= state.hitRevision; revision++) {
+        const delay = (revision - previousRevision - 1) * 35;
+        this.scene.time.delayedCall(delay, () => {
+          this.showEnemyHitFeedback(view!, state.type, revision);
+        });
+      }
     }
     view.target = state;
     view.targetAt = performance.now();
     view.sprite.setFrame(state.frame);
+    view.sprite.setVisible(state.type === 'boss' || portalRemainingMs <= 0);
     if (view.presentation) {
       view.sprite.setAlpha(0).setDisplaySize(view.presentation.visualHeight, view.presentation.visualHeight);
       view.presentation.sync(state.x, state.y, state.vx < 0);
+      view.presentation.syncBossAttack(state.bossAttack ?? null);
     } else {
       view.sprite.setAlpha(1).setScale(state.scale);
     }
@@ -428,6 +581,9 @@ export class ClientWorldRenderer {
       view = { sprite, target: state, targetAt: performance.now() };
       this.objects.set(state.id, view);
     }
+    if (view.sprite.texture.key !== state.texture || view.sprite.frame.name !== state.frame) {
+      view.sprite.setTexture(state.texture, state.frame);
+    }
     view.target = state;
     view.targetAt = performance.now();
   }
@@ -436,12 +592,18 @@ export class ClientWorldRenderer {
     let view = this.runes.get(state.id);
     if (!view) {
       view = {
-        sprite: this.scene.add.sprite(state.x, state.y, 'rune').setDepth(7).setDisplaySize(62, 62),
+        sprite: this.scene.add.sprite(state.x, state.y, runeTextureKey(state.phase))
+          .setDepth(7).setDisplaySize(62, 62),
+        phase: state.phase,
         gaugeBackground: this.scene.add.rectangle(state.x, state.y + 40, 58, 8, UI_COLORS.panelDeep).setDepth(29),
         gaugeFill: this.scene.add.rectangle(state.x - 28, state.y + 40, 1, 6, UI_COLORS.primary)
           .setOrigin(0, 0.5).setDepth(30),
       };
       this.runes.set(state.id, view);
+    }
+    if (view.phase !== state.phase) {
+      view.phase = state.phase;
+      view.sprite.setTexture(runeTextureKey(state.phase));
     }
     const size = 62 + state.chargeRatio * 8;
     view.sprite.setPosition(state.x, state.y).setDisplaySize(size, size)
@@ -466,7 +628,8 @@ export class ClientWorldRenderer {
   private destroyEnemy(id: string, playDeathAnimation = false): void {
     const view = this.enemies.get(id);
     view?.presentation?.destroy(playDeathAnimation);
-    view?.sprite.destroy(); view?.hpBg.destroy(); view?.hpBar.destroy();
+    view?.spawnPresentation?.destroy();
+    view?.sprite.destroy(); view?.hpBg?.destroy(); view?.hpBar?.destroy();
     this.enemies.delete(id); this.canonicalEnemies.delete(id);
   }
 
@@ -481,5 +644,20 @@ export class ClientWorldRenderer {
     view?.gaugeBackground.destroy();
     view?.gaugeFill.destroy();
     this.runes.delete(id); this.canonicalRunes.delete(id);
+  }
+
+  private destroyPlayer(playerId: string): void {
+    const timer = this.playerRemovalTimers.get(playerId);
+    timer?.remove(false);
+    this.playerRemovalTimers.delete(playerId);
+    const view = this.players.get(playerId);
+    if (!view) return;
+    view.controller.destroy();
+    view.status.destroy();
+    view.shield.destroy();
+    view.shieldPresentation?.destroy(false);
+    this.players.delete(playerId);
+    this.knownReviveIds.delete(playerId);
+    this.latestPlayers = this.latestPlayers.filter((player) => player.id !== playerId);
   }
 }

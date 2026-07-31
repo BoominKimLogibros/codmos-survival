@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   createPlayerViewportBounds,
   EXPLOSION_FUSE_DURATION_MS,
@@ -43,4 +44,22 @@ assert.equal(isCombatEffectPayload({ ...networkEffect, x: Number.NaN }), false);
 assert.equal(isCombatEffectPayload({ ...networkEffect, radius: 0 }), false);
 assert.equal(isCombatEffectPayload({ type: 'explosion' }), false);
 
-console.log('Explosion smoke test passed: visible bounds, clustered target, offscreen rejection, 1s fuse, UDP payload validation');
+const spineJson = JSON.parse(readFileSync(
+  'public/assets/effects/explosion-spine.json',
+  'utf8',
+)) as { animations?: Record<string, unknown>; slots?: Array<{ name?: string }> };
+assert.deepEqual(Object.keys(spineJson.animations ?? {}), ['animation']);
+assert.deepEqual(spineJson.slots?.map(({ name }) => name), [
+  'dust01', 'dust02', 'dust03', 'dust04', 'dust05',
+  'dust06', 'dust07', 'dust08', 'dust09',
+]);
+const spineAtlas = readFileSync('public/assets/effects/explosion-spine.atlas', 'utf8');
+assert.match(spineAtlas, /explosion-spine\.png/);
+for (let frame = 1; frame <= 9; frame++) {
+  assert.match(spineAtlas, new RegExp(`dust0${frame}\\n`));
+}
+const spinePng = readFileSync('public/assets/effects/explosion-spine.png');
+assert.equal(spinePng.readUInt32BE(16), 476);
+assert.equal(spinePng.readUInt32BE(20), 884);
+
+console.log('Explosion smoke test passed: targeting, 1s fuse, UDP payload, 9-frame Spine asset');

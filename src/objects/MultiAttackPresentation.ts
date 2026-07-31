@@ -1,9 +1,17 @@
-import type { EnemySprite } from '../game/types';
 import { UI_COLORS } from '../ui/theme';
 
-interface MultiAttackPresentationOptions {
-  targets: EnemySprite[];
-  onImpact: (enemy: EnemySprite) => void;
+export interface MultiAttackVisualTarget {
+  active: boolean;
+  x: number;
+  y: number;
+  enemyType?: string;
+  knockbackUntil?: number;
+  setVelocity?: (x: number, y: number) => unknown;
+}
+
+interface MultiAttackPresentationOptions<T extends MultiAttackVisualTarget> {
+  targets: T[];
+  onImpact: (enemy: T) => void;
 }
 
 const CHARGE_DURATION_MS = 850;
@@ -17,11 +25,11 @@ const TARGET_MARKER_MARGIN = 100;
 export class MultiAttackPresentation {
   static readonly durationMs = PRESENTATION_DURATION_MS;
 
-  static play(
+  static play<T extends MultiAttackVisualTarget>(
     scene: Phaser.Scene,
     x: number,
     y: number,
-    options: MultiAttackPresentationOptions,
+    options: MultiAttackPresentationOptions<T>,
   ): void {
     this.createCentralEffect(scene, x, y);
     this.createTargetSequence(scene, x, y, options);
@@ -153,11 +161,11 @@ export class MultiAttackPresentation {
     }
   }
 
-  private static createTargetSequence(
+  private static createTargetSequence<T extends MultiAttackVisualTarget>(
     scene: Phaser.Scene,
     originX: number,
     originY: number,
-    options: MultiAttackPresentationOptions,
+    options: MultiAttackPresentationOptions<T>,
   ): void {
     const targets = [...options.targets].sort((left, right) => (
       Phaser.Math.Distance.Squared(originX, originY, left.x, left.y) -
@@ -172,10 +180,10 @@ export class MultiAttackPresentation {
       enemy.y >= worldView.y - TARGET_MARKER_MARGIN &&
       enemy.y <= worldView.bottom + TARGET_MARKER_MARGIN
     )).slice(0, MAX_TARGET_MARKERS));
-    const markers = new Map<EnemySprite, Phaser.GameObjects.Arc>();
+    const markers = new Map<T, Phaser.GameObjects.Arc>();
 
     targets.forEach((enemy) => {
-      enemy.setVelocity(0, 0);
+      enemy.setVelocity?.(0, 0);
       enemy.knockbackUntil = scene.time.now + Math.max(sequenceEnd, PRESENTATION_DURATION_MS);
       if (!visualTargets.has(enemy)) return;
 
@@ -206,7 +214,13 @@ export class MultiAttackPresentation {
         markers.delete(enemy);
         if (!enemy.active) return;
         if (visualTargets.has(enemy)) {
-          this.createTargetImpact(scene, enemy.x, enemy.y, cursor + index);
+          this.createTargetImpact(
+            scene,
+            enemy.x,
+            enemy.y,
+            cursor + index,
+            enemy.enemyType === 'boss',
+          );
         }
         options.onImpact(enemy);
       });
@@ -227,12 +241,20 @@ export class MultiAttackPresentation {
     x: number,
     y: number,
     index: number,
+    isBoss: boolean,
   ): void {
-    const beam = scene.add.rectangle(x, y - 50, 10, 180, UI_COLORS.white, 0.82)
+    const beam = scene.add.rectangle(
+      x,
+      y - (isBoss ? 105 : 50),
+      isBoss ? 28 : 10,
+      isBoss ? 310 : 180,
+      UI_COLORS.white,
+      isBoss ? 0.96 : 0.82,
+    )
       .setDepth(32)
       .setScale(1, 0.08)
       .setBlendMode(Phaser.BlendModes.ADD);
-    const blast = scene.add.circle(x, y, 18, UI_COLORS.primary, 0.75)
+    const blast = scene.add.circle(x, y, isBoss ? 34 : 18, UI_COLORS.primary, 0.75)
       .setDepth(33)
       .setBlendMode(Phaser.BlendModes.ADD);
     scene.tweens.add({
@@ -246,13 +268,31 @@ export class MultiAttackPresentation {
     });
     scene.tweens.add({
       targets: blast,
-      scaleX: 3.4,
-      scaleY: 3.4,
+      scaleX: isBoss ? 5.2 : 3.4,
+      scaleY: isBoss ? 5.2 : 3.4,
       alpha: 0,
       duration: 360,
       ease: 'Cubic.easeOut',
       onComplete: () => blast.destroy(),
     });
+    if (isBoss) {
+      const shockwave = scene.add.ellipse(x, y + 4, 88, 30)
+        .setStrokeStyle(6, UI_COLORS.white, 0.9)
+        .setDepth(34)
+        .setScale(0.4)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      scene.tweens.add({
+        targets: shockwave,
+        scaleX: 3.8,
+        scaleY: 3.8,
+        alpha: 0,
+        duration: 460,
+        ease: 'Cubic.easeOut',
+        onComplete: () => shockwave.destroy(),
+      });
+      scene.cameras.main.shake(190, 0.012);
+      return;
+    }
     if (index % 8 === 0) scene.cameras.main.shake(90, 0.0025);
   }
 }

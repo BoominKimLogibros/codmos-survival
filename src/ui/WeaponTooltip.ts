@@ -52,7 +52,7 @@ export class WeaponTooltip {
     const level = this.scene.add.text(
       width / 2 - horizontalPadding,
       top + 17,
-      `Lv ${data.level} / ${data.maxLevel ?? '∞'}`,
+      data.levelLabel ?? `Lv ${data.level} / ${data.maxLevel ?? '∞'}`,
       uiTextStyle({ color: '#d4d7de', fontSize: '11px', fontStyle: '800' }),
     ).setOrigin(1, 0);
     const description = this.scene.add.text(

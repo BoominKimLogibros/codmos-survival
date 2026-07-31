@@ -99,6 +99,7 @@ const config: Phaser.Types.Core.GameConfig = {
   height: gameContainer.clientHeight || window.innerHeight || GAME_HEIGHT,
   parent: 'game-container',
   backgroundColor: '#0b0d12',
+  antialiasGL: true,
   physics: { default: 'arcade', arcade: { debug: false } },
   scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.NO_CENTER },
   scene: [

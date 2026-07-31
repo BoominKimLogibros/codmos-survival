@@ -1,4 +1,5 @@
 import type { EnemyType, GameSaveState, LevelUpChoice, RuneType, WeaponKey } from '../game/types';
+import type { BossAttackVisualState } from '../game/bossBehavior';
 
 export interface NetPlayerState {
   id: string;
@@ -18,6 +19,8 @@ export interface NetPlayerState {
   connected: boolean;
   shield: number;
   hitRevision: number;
+  success: boolean;
+  successRevision: number;
 }
 
 export interface NetEnemyState {
@@ -33,6 +36,9 @@ export interface NetEnemyState {
   scale: number;
   bossTier: number;
   hitRevision: number;
+  portalSpawnEndsAt?: number;
+  bossSpawnRemainingMs?: number;
+  bossAttack?: BossAttackVisualState;
 }
 
 export interface CombatEffectPayload {
@@ -73,6 +79,12 @@ export interface NetObjectState {
   vy?: number;
   rotation?: number;
   scale?: number;
+  scaleY?: number;
+  flipX?: boolean;
+  originX?: number;
+  originY?: number;
+  alpha?: number;
+  depth?: number;
   kind: 'projectile' | 'xp' | 'health';
 }
 
@@ -81,6 +93,7 @@ export interface NetRuneState {
   type: RuneType;
   x: number;
   y: number;
+  phase: 'embedded' | 'emerging' | 'available';
   chargingPlayerId?: string;
   chargeRatio: number;
 }
@@ -136,6 +149,49 @@ export interface RuneChallengePayload {
   runeType: RuneType;
   sequence: number[];
   retryAt: number;
+}
+
+export type RuneStateEvent =
+  | { event: 'challenge'; challenge: RuneChallengePayload }
+  | { event: 'progress'; challengeId: string; attempt: number; index: number }
+  | { event: 'retry'; challengeId: string; attempt: number; retryAt: number }
+  | { event: 'complete'; challengeId: string; attempt: number; index: number; cancelled?: boolean };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function isRuneStateEvent(value: unknown): value is RuneStateEvent {
+  if (!isRecord(value) || typeof value.event !== 'string') return false;
+  if (value.event === 'challenge') {
+    const challenge = value.challenge;
+    return isRecord(challenge) &&
+      typeof challenge.challengeId === 'string' && challenge.challengeId.length > 0 &&
+      typeof challenge.playerId === 'string' && challenge.playerId.length > 0 &&
+      (challenge.runeType === 'multiAttack' || challenge.runeType === 'shield') &&
+      Array.isArray(challenge.sequence) && challenge.sequence.length > 0 && challenge.sequence.length <= 16 &&
+      challenge.sequence.every((direction) => Number.isInteger(direction) && direction >= 0 && direction <= 3) &&
+      typeof challenge.retryAt === 'number' && Number.isFinite(challenge.retryAt);
+  }
+  if (typeof value.challengeId !== 'string' || value.challengeId.length === 0) return false;
+  if (!Number.isInteger(value.attempt) || Number(value.attempt) < 0) return false;
+  if (value.event === 'progress') {
+    return Number.isInteger(value.index) && Number(value.index) >= 1 && Number(value.index) <= 16;
+  }
+  if (value.event === 'retry') {
+    return typeof value.retryAt === 'number' && Number.isFinite(value.retryAt);
+  }
+  return value.event === 'complete' &&
+    Number.isInteger(value.index) && Number(value.index) >= 0 && Number(value.index) <= 16 &&
+    (value.cancelled === undefined || typeof value.cancelled === 'boolean');
+}
+
+export function createRuntimeId(prefix: string): string {
+  const randomUuid = globalThis.crypto?.randomUUID;
+  if (typeof randomUuid === 'function') {
+    try { return randomUuid.call(globalThis.crypto); } catch { /* fallback below */ }
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export interface PlayerCheckpointPayload {

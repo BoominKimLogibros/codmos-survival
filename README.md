@@ -7,7 +7,7 @@ Phaser 3 기반 생존 게임입니다. 게임 엔진, Spine 플러그인, 이�
 - [웹에서 혼자 바로하기](https://boominkimlogibros.github.io/codmos-survival/)
 - [Windows·macOS 최신 버전 다운로드](https://github.com/BoominKimLogibros/codmos-survival/releases/latest)
 
-- 현재 버전: `1.1.1`
+- 현재 버전: `1.1.2`
 - 공식 사이트: [codmos.io](https://codmos.io)
 - 저작권: Copyright © 2026 Logibrothers. All rights reserved.
 
@@ -79,6 +79,7 @@ npm run package:win  # NSIS (Windows 환경에서 실행)
 ```bash
 npm run typecheck
 npm run typecheck:electron
+npm run test:player-success
 npm run test:udp
 npm run smoke:electron
 ```

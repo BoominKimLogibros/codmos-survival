@@ -1,4 +1,5 @@
 import { INPUT_DOWN, INPUT_LEFT, INPUT_RIGHT, INPUT_UP } from '../game/PlayerController';
+import { TouchJoystick } from '../ui/TouchJoystick';
 
 const INPUT_RESEND_MS = 50;
 
@@ -7,6 +8,7 @@ export class NetworkInputSource {
   private readonly wasd: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private lastMask = -1;
   private lastSentAt = 0;
+  private readonly joystick: TouchJoystick;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -19,10 +21,14 @@ export class NetworkInputSource {
       left: scene.input.keyboard!.addKey('A'),
       right: scene.input.keyboard!.addKey('D'),
     };
+    this.joystick = new TouchJoystick(scene);
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.stop());
   }
 
   read(enabled = true): number {
+    this.joystick.setEnabled(enabled);
     if (!enabled) return 0;
+    if (this.joystick.engaged) return this.joystick.read();
     let mask = 0;
     if (this.cursors.up.isDown || this.wasd.up.isDown) mask |= INPUT_UP;
     if (this.cursors.down.isDown || this.wasd.down.isDown) mask |= INPUT_DOWN;
@@ -43,8 +49,13 @@ export class NetworkInputSource {
   }
 
   stop(): void {
+    this.joystick.reset();
     if (this.onSend && this.lastMask !== 0) this.onSend(0);
     this.lastMask = 0;
     this.lastSentAt = performance.now();
+  }
+
+  get touchControlsVisible(): boolean {
+    return this.joystick.visible;
   }
 }

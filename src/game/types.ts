@@ -1,4 +1,5 @@
 import type { EnemyHealthBar } from '../objects/EnemyHealthBar';
+import type { BossAttackPhase, BossAttackStyle, BossAttackVisualState } from './bossBehavior';
 import {
   ADAPTIVE_INITIAL_ACTIVE_TARGET,
   ADAPTIVE_INITIAL_SPAWN_BATCH,
@@ -56,6 +57,7 @@ export interface WeaponTooltipData {
   description: string;
   level: number;
   maxLevel: number | null;
+  levelLabel?: string;
   stats: WeaponTooltipStat[];
 }
 
@@ -157,7 +159,15 @@ export interface EnemyDefinition {
 export interface EnemyPresentation {
   sync(x: number, y: number, movingLeft: boolean): void;
   showDamageFeedback(): void;
+  syncBossAttack?(state: BossAttackVisualState | null): void;
+  setVisible?(visible: boolean): void;
   destroy(playDeathAnimation?: boolean): void;
+}
+
+export interface EnemySpawnPresentation {
+  sync(x: number, y: number): void;
+  setVisible(visible: boolean): void;
+  destroy(): void;
 }
 
 export interface EnemySprite extends Phaser.Physics.Arcade.Sprite {
@@ -171,8 +181,25 @@ export interface EnemySprite extends Phaser.Physics.Arcade.Sprite {
   lastDmgT: number;
   hitRevision?: number;
   knockbackUntil?: number;
+  knockbackStrength?: number;
   normalGeneration: number;
+  portalSpawnEndsAt?: number;
+  portalSpawnNetworkEndsAt?: number;
+  spawnPresentation?: EnemySpawnPresentation | null;
   bossTier?: number;
+  bossSpawnEndsAt?: number;
+  bossAttackPhase?: BossAttackPhase;
+  bossAttackRevision?: number;
+  bossAttackStartedAt?: number;
+  bossAttackEndsAt?: number;
+  bossAttackCooldownUntil?: number;
+  bossAttackOriginX?: number;
+  bossAttackOriginY?: number;
+  bossAttackTargetX?: number;
+  bossAttackTargetY?: number;
+  bossAttackRadius?: number;
+  bossAttackStyle?: BossAttackStyle;
+  bossAttackHitPlayers?: WeakSet<object>;
   baseTint?: number;
   presentation?: EnemyPresentation | null;
   healthBar?: EnemyHealthBar | null;
@@ -189,14 +216,32 @@ export interface EnemySprite extends Phaser.Physics.Arcade.Sprite {
 export interface DamageSprite extends Phaser.Physics.Arcade.Sprite {
   damage: number;
   pierce?: number;
+  damageSourceId?: string;
+  hitIntervalMs?: number;
+  hitMode?: 'cooldown' | 'contact';
+  presentationOnly?: boolean;
+  networkHidden?: boolean;
+  knockback?: EnemyKnockback;
+}
+
+export interface EnemyKnockback {
+  directionX: number;
+  directionY: number;
+  strength: number;
+  durationMs: number;
 }
 
 export interface DropSprite extends Phaser.Physics.Arcade.Sprite {
   xpValue?: number;
+  xpDropKind?: 'regular' | 'boss';
 }
 
 export interface RuneSprite extends Phaser.Physics.Arcade.Sprite {
   runeType: RuneType;
+  runeSpawnedAt: number;
+  runeAnchorY: number;
+  runeAvailable: boolean;
+  runePhase: 'embedded' | 'emerging' | 'available';
 }
 
 export interface AudioEffects {
@@ -207,7 +252,6 @@ export interface AudioEffects {
   boing: Phaser.Sound.BaseSound;
   spring: Phaser.Sound.BaseSound;
   bomb: Phaser.Sound.BaseSound;
-  giggle: Phaser.Sound.BaseSound;
   scream: Phaser.Sound.BaseSound;
   thump: Phaser.Sound.BaseSound;
   multiAttack: Phaser.Sound.BaseSound;

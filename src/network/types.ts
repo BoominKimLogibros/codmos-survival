@@ -5,9 +5,10 @@ export const UDP_DISCOVERY_PORT = 41777;
 // while multicast loopback lets two Electron processes discover each other on
 // the same computer (unicast packets on a shared UDP port are not fanned out).
 export const UDP_DISCOVERY_MULTICAST_ADDRESS = '239.255.42.99';
-export const UDP_PROTOCOL_VERSION = 6;
+export const UDP_PROTOCOL_VERSION = 7;
 export const UDP_MAX_PLAYERS = 20;
 export const UDP_MIN_PLAYERS = 1;
+export const PLAYER_LEAVE_GHOST_DURATION_MS = 3_000;
 
 export type RoomStatus = 'waiting' | 'playing';
 export type MemberConnection = 'connected' | 'reconnecting' | 'left';

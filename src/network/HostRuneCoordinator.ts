@@ -1,4 +1,5 @@
 import {
+  ARENA_PLAYABLE_HALF_SIZE,
   RUNE_CHARGE_DURATION_MS,
   RUNE_CHARGE_RADIUS,
   RUNE_RETRY_DELAY_MS,
@@ -6,16 +7,19 @@ import {
   RUNE_SEQUENCE_LENGTH,
   RUNE_SHIELD_BLOCK_COUNT,
   TILE_SIZE,
-  WORLD_SIZE,
 } from '../config/constants';
 import type { AudioManager } from '../game/AudioManager';
 import type { EnemySystem } from '../game/EnemySystem';
 import type { PlayerController } from '../game/PlayerController';
+import { runeDropVisualState, runeTextureKey, type RuneDropPhase } from '../game/runeDrop';
+import { MULTI_ATTACK_BOSS_DAMAGE_RATIO, multiAttackDamage } from '../game/runeAttack';
 import { getRuneSpawnChance } from '../game/runeSpawn';
 import type { EnemySprite, RuneType, RunProgress } from '../game/types';
 import { MultiAttackPresentation } from '../objects/MultiAttackPresentation';
+import { RuneActivationPresentation } from '../objects/RuneActivationPresentation';
 import { UI_COLORS } from '../ui/theme';
-import type { NetRuneState, RuneChallengePayload } from './gameProtocol';
+import { createRuntimeId } from './gameProtocol';
+import type { NetRuneState, RuneChallengePayload, RuneStateEvent } from './gameProtocol';
 
 interface HostRune {
   id: string;
@@ -23,11 +27,15 @@ interface HostRune {
   sprite: Phaser.Physics.Arcade.Sprite;
   chargingPlayerId?: string;
   chargeMs: number;
+  spawnedAt: number;
+  anchorY: number;
+  available: boolean;
+  phase: RuneDropPhase;
   gaugeBackground: Phaser.GameObjects.Rectangle;
   gaugeFill: Phaser.GameObjects.Rectangle;
 }
 
-interface HostChallenge extends RuneChallengePayload { index: number }
+interface HostChallenge extends RuneChallengePayload { index: number; attempt: number }
 
 export class HostRuneCoordinator {
   private readonly runes = new Map<string, HostRune>();
@@ -48,7 +56,10 @@ export class HostRuneCoordinator {
 
   update(delta: number): void {
     this.rollSpawn();
-    for (const rune of this.runes.values()) this.updateCharge(rune, delta);
+    for (const rune of this.runes.values()) {
+      this.updateAppearance(rune);
+      this.updateCharge(rune, delta);
+    }
   }
 
   getShieldCharges(playerId: string): number { return this.shieldCharges.get(playerId) ?? 0; }
@@ -58,7 +69,9 @@ export class HostRuneCoordinator {
     for (const [challengeId, challenge] of this.challenges) {
       if (challenge.playerId !== playerId) continue;
       this.challenges.delete(challengeId);
-      this.deliver(playerId, 'rune-complete', { challengeId, cancelled: true }, true);
+      this.deliverRuneState(playerId, {
+        event: 'complete', challengeId, attempt: challenge.attempt, index: challenge.index, cancelled: true,
+      });
     }
   }
 
@@ -71,19 +84,30 @@ export class HostRuneCoordinator {
   }
 
   handleInput(playerId: string, challengeId: string, direction: number): void {
+    if (!challengeId || !Number.isInteger(direction) || direction < 0 || direction > 3) return;
     const challenge = this.challenges.get(challengeId);
     if (!challenge || challenge.playerId !== playerId || Date.now() < challenge.retryAt) return;
     if (challenge.sequence[challenge.index] !== direction) {
       challenge.index = 0;
+      challenge.attempt++;
       challenge.retryAt = Date.now() + RUNE_RETRY_DELAY_MS;
-      this.deliver(playerId, 'rune-retry', { challengeId, retryAt: challenge.retryAt }, true);
+      this.deliverRuneState(playerId, {
+        event: 'retry',
+        challengeId,
+        attempt: challenge.attempt,
+        retryAt: challenge.retryAt,
+      });
       return;
     }
     challenge.index++;
-    this.deliver(playerId, 'rune-progress', { challengeId, index: challenge.index }, true);
+    this.deliverRuneState(playerId, {
+      event: 'progress', challengeId, attempt: challenge.attempt, index: challenge.index,
+    });
     if (challenge.index < challenge.sequence.length) return;
     this.challenges.delete(challengeId);
-    this.deliver(playerId, 'rune-complete', { challengeId }, true);
+    this.deliverRuneState(playerId, {
+      event: 'complete', challengeId, attempt: challenge.attempt, index: challenge.index,
+    });
     this.activate(playerId, challenge.runeType);
   }
 
@@ -93,6 +117,7 @@ export class HostRuneCoordinator {
       type: rune.type,
       x: rune.sprite.x,
       y: rune.sprite.y,
+      phase: rune.phase,
       chargingPlayerId: rune.chargingPlayerId,
       chargeRatio: rune.chargeMs / RUNE_CHARGE_DURATION_MS,
     }));
@@ -109,10 +134,10 @@ export class HostRuneCoordinator {
     const player = Phaser.Utils.Array.GetRandom(living);
     const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
     const distance = Phaser.Math.Between(190, 330);
-    const boundary = WORLD_SIZE / 2 - TILE_SIZE;
+    const boundary = ARENA_PLAYABLE_HALF_SIZE - TILE_SIZE;
     const x = Phaser.Math.Clamp(player.controller.sprite.x + Math.cos(angle) * distance, -boundary, boundary);
     const y = Phaser.Math.Clamp(player.controller.sprite.y + Math.sin(angle) * distance, -boundary, boundary);
-    const sprite = this.scene.physics.add.sprite(x, y, 'rune').setDepth(7).setDisplaySize(62, 62);
+    const sprite = this.scene.physics.add.sprite(x, y, 'runeEmbedded').setDepth(7).setDisplaySize(62, 62);
     const gaugeBackground = this.scene.add.rectangle(x, y + 40, 58, 8, UI_COLORS.panelDeep)
       .setDepth(29).setVisible(false);
     const gaugeFill = this.scene.add.rectangle(x - 28, y + 40, 1, 6, UI_COLORS.primary)
@@ -122,16 +147,37 @@ export class HostRuneCoordinator {
       type: Math.random() < 0.5 ? 'multiAttack' : 'shield',
       sprite,
       chargeMs: 0,
+      spawnedAt: this.scene.time.now,
+      anchorY: y,
+      available: false,
+      phase: 'embedded',
       gaugeBackground,
       gaugeFill,
     };
     this.runes.set(rune.id, rune);
     this.scene.tweens.add({ targets: sprite, alpha: 0.78, duration: 850, yoyo: true, repeat: -1 });
-    this.toast(`${rune.type === 'shield' ? '보호막' : '다중 공격'} 룬 등장`);
+    this.toast(`${rune.type === 'shield' ? '보호막' : '다중 공격'} 룬 등장 · 3초 뒤 활성화`);
+  }
+
+  private updateAppearance(rune: HostRune): void {
+    const visual = runeDropVisualState(this.scene.time.now - rune.spawnedAt);
+    if (rune.phase !== visual.phase) {
+      rune.phase = visual.phase;
+      rune.sprite.setTexture(runeTextureKey(visual.phase));
+    }
+    rune.available = visual.available;
+    rune.sprite.y = rune.anchorY + visual.offsetY;
   }
 
   private updateCharge(rune: HostRune, delta: number): void {
     if (!rune.sprite.active) return;
+    if (!rune.available) {
+      rune.chargingPlayerId = undefined;
+      rune.chargeMs = 0;
+      rune.gaugeBackground.setVisible(false);
+      rune.gaugeFill.setVisible(false);
+      return;
+    }
     const target = this.livingPlayers()
       .map((entry) => ({
         ...entry,
@@ -163,20 +209,22 @@ export class HostRuneCoordinator {
     rune.gaugeBackground.destroy();
     rune.gaugeFill.destroy();
     const challenge: HostChallenge = {
-      challengeId: crypto.randomUUID(),
+      challengeId: createRuntimeId('rune'),
       playerId: target.id,
       runeType: rune.type,
       sequence: Array.from({ length: RUNE_SEQUENCE_LENGTH }, () => Phaser.Math.Between(0, 3)),
       retryAt: 0,
       index: 0,
+      attempt: 0,
     };
     this.challenges.set(challenge.challengeId, challenge);
-    this.deliver(target.id, 'rune-challenge', challenge, true);
+    this.deliverRuneState(target.id, { event: 'challenge', challenge });
   }
 
   private activate(playerId: string, runeType: RuneType): void {
     const player = this.players.get(playerId);
     if (!player) return;
+    RuneActivationPresentation.play(this.scene, runeType);
     if (runeType === 'shield') {
       this.shieldCharges.set(playerId, RUNE_SHIELD_BLOCK_COUNT);
       this.audio.effects.shield.play();
@@ -185,20 +233,19 @@ export class HostRuneCoordinator {
       return;
     }
     const targets = this.enemies.getActiveEnemies();
-    const baseDamage = Math.max(100, player.stats.level * 20);
     this.audio.effects.multiAttack.play();
     this.broadcast('rune-effect', { playerId, runeType }, true);
     MultiAttackPresentation.play(this.scene, player.sprite.x, player.sprite.y, {
       targets,
       onImpact: (enemy: EnemySprite) => {
-        if (!enemy.active) return;
-        const damage = enemy.enemyType === 'boss'
-          ? Math.max(baseDamage, Math.ceil(enemy.maxHp * 0.1))
-          : enemy.hp;
-        this.enemies.damageEnemy(enemy, damage);
+        if (!enemy.active || player.isBossSuccessActive) return;
+        this.enemies.damageEnemy(enemy, multiAttackDamage(enemy, player.stats.level));
       },
     });
-    this.toast(`${this.playerName(playerId)} 다중 공격 발동`);
+    this.toast(
+      `${this.playerName(playerId)} 다중 공격 · 일반 몬스터 전멸, ` +
+      `보스 최대 HP ${MULTI_ATTACK_BOSS_DAMAGE_RATIO * 100}% 강타`,
+    );
   }
 
   private livingPlayers(): Array<{ id: string; controller: PlayerController }> {
@@ -209,5 +256,9 @@ export class HostRuneCoordinator {
 
   private playerName(playerId: string): string {
     return playerId.slice(0, 6);
+  }
+
+  private deliverRuneState(playerId: string, event: RuneStateEvent): void {
+    this.deliver(playerId, 'rune-state', event, true);
   }
 }

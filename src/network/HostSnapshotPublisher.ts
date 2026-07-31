@@ -1,7 +1,7 @@
 import type { EnemySystem } from '../game/EnemySystem';
 import type { PlayerController } from '../game/PlayerController';
 import type { WeaponSystem } from '../game/WeaponSystem';
-import type { DropSprite, EnemySprite, RunProgress } from '../game/types';
+import type { DamageSprite, DropSprite, EnemySprite, RunProgress } from '../game/types';
 import type { RoomMember } from './types';
 import type { HostRuneCoordinator } from './HostRuneCoordinator';
 import type {
@@ -66,7 +66,9 @@ export class HostSnapshotPublisher {
   }
 
   playerStates(): NetPlayerState[] {
-    const members = this.members();
+    const members = this.members().filter((member) => (
+      member.connection !== 'left' || this.players.has(member.playerId)
+    ));
     return members.map((member) => {
       const player = this.players.get(member.playerId);
       const body = player?.sprite.body as Phaser.Physics.Arcade.Body | null;
@@ -88,8 +90,14 @@ export class HostSnapshotPublisher {
         connected: member.connection === 'connected',
         shield: this.shieldCharges(member.playerId),
         hitRevision: player?.hitRevision ?? 0,
+        success: player?.isBossSuccessActive ?? false,
+        successRevision: player?.bossSuccessRevision ?? 0,
       };
     });
+  }
+
+  removePlayer(playerId: string): void {
+    this.caches.delete(playerId);
   }
 
   private buildSnapshot(
@@ -135,7 +143,11 @@ export class HostSnapshotPublisher {
           .filter((object) => object.active && inRange(object.x, object.y))
           .forEach((object) => objects.push(this.objectState(object, 'projectile')));
         (weapon.meleeHits.getChildren() as Phaser.Physics.Arcade.Sprite[])
-          .filter((object) => object.active && inRange(object.x, object.y))
+          .filter((object) => (
+            object.active &&
+            !(object as DamageSprite).networkHidden &&
+            inRange(object.x, object.y)
+          ))
           .forEach((object) => objects.push(this.objectState(object, 'projectile')));
       }
       (this.enemySystem.xpGems.getChildren() as DropSprite[])
@@ -206,6 +218,9 @@ export class HostSnapshotPublisher {
       scale: Math.abs(enemy.scaleX) || 0.3,
       bossTier: enemy.bossTier ?? 0,
       hitRevision: enemy.hitRevision ?? 0,
+      portalSpawnEndsAt: this.enemySystem.getMonsterPortalNetworkEndsAt(enemy) || undefined,
+      bossSpawnRemainingMs: this.enemySystem.getBossEntryRemainingMs(enemy) || undefined,
+      bossAttack: this.enemySystem.getBossAttackVisualState(enemy) ?? undefined,
     };
   }
 
@@ -224,6 +239,12 @@ export class HostSnapshotPublisher {
       vy: Math.round(body?.velocity.y ?? 0),
       rotation: Math.round(object.rotation * 100) / 100,
       scale: Math.abs(object.scaleX),
+      scaleY: Math.abs(object.scaleY),
+      flipX: object.flipX,
+      originX: object.originX,
+      originY: object.originY,
+      alpha: Math.round(object.alpha * 100) / 100,
+      depth: object.depth,
       kind,
     };
   }

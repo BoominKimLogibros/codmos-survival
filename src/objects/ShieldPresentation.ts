@@ -5,9 +5,11 @@ type ShieldEffect = SpineGameObject | Phaser.GameObjects.Arc;
 /** Persistent rune shield that follows a player and reacts when a charge is spent. */
 export class ShieldPresentation {
   private readonly effect: ShieldEffect;
-  private readonly shell: Phaser.GameObjects.Arc;
+  private readonly isSpineEffect: boolean;
   private currentCharges: number;
   private destroyed = false;
+  private x: number;
+  private y: number;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -16,21 +18,18 @@ export class ShieldPresentation {
     charges: number,
   ) {
     this.currentCharges = charges;
-    this.shell = scene.add.circle(x, y, 52, UI_COLORS.primary, 0.1)
-      .setStrokeStyle(3, UI_COLORS.white, 0.72)
-      .setDepth(5.8)
-      .setBlendMode(Phaser.BlendModes.ADD);
+    this.x = x;
+    this.y = y;
+    this.effect = this.createEffect(x, y);
+    this.isSpineEffect = !(this.effect instanceof Phaser.GameObjects.Arc);
     scene.tweens.add({
-      targets: this.shell,
-      scaleX: { from: 0.94, to: 1.07 },
-      scaleY: { from: 0.94, to: 1.07 },
-      alpha: { from: 0.5, to: 0.9 },
+      targets: this.effect,
+      alpha: { from: this.isSpineEffect ? 0.84 : 0.5, to: 1 },
       duration: 780,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut',
     });
-    this.effect = this.createEffect(x, y);
   }
 
   get charges(): number {
@@ -46,22 +45,20 @@ export class ShieldPresentation {
 
   setPosition(x: number, y: number): void {
     if (this.destroyed) return;
-    this.shell.setPosition(x, y);
+    this.x = x;
+    this.y = y;
     this.effect.setPosition(
       x,
-      y + (this.effect instanceof Phaser.GameObjects.Arc ? 0 : 18),
+      y + (this.isSpineEffect ? 18 : 0),
     );
   }
 
   destroy(depleted = false): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    const { x, y } = this.shell;
-    this.scene.tweens.killTweensOf(this.shell);
     this.scene.tweens.killTweensOf(this.effect);
     this.effect.destroy();
-    this.shell.destroy();
-    if (depleted && this.scene.sys.isActive()) this.showBreakFeedback(x, y);
+    if (depleted && this.scene.sys.isActive()) this.showBreakFeedback(this.x, this.y);
   }
 
   private createEffect(x: number, y: number): ShieldEffect {
@@ -73,9 +70,9 @@ export class ShieldPresentation {
           'runeShield',
           'animation',
           true,
-        ).setDepth(6).setScale(0.42).setAlpha(0.82);
+        ).setDepth(6).setScale(0.42).setAlpha(1);
       } catch (error) {
-        console.warn('UDP shield Spine effect failed, using fallback:', error);
+        console.warn('Rune shield Spine effect failed, using fallback:', error);
       }
     }
     return this.scene.add.circle(x, y, 48, UI_COLORS.primary, 0.12)

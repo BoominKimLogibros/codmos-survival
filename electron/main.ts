@@ -197,13 +197,34 @@ function createWindow(): void {
             });
           }, 1400);
         })`);
-        const combined = { ...result, gameplay: gameplayResult };
+        mainWindow?.setSize(920, 620);
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        const resizeResult = await mainWindow?.webContents.executeJavaScript(`(() => {
+          const scene = window.game.scene.scenes.find(
+            (candidate) => candidate.scene?.key === 'MultiplayerGameScene'
+          );
+          const width = scene?.scale?.gameSize?.width || 0;
+          const height = scene?.scale?.gameSize?.height || 0;
+          const exitX = scene?.exitButton?.x;
+          const exitY = scene?.exitButton?.y;
+          return {
+            width,
+            height,
+            exitX,
+            exitY,
+            anchoredX: Math.abs(exitX - (width - 70)) < 0.01,
+            anchoredY: Math.abs(exitY - (height - 35)) < 0.01
+          };
+        })()`);
+        const combined = { ...result, gameplay: gameplayResult, resize: resizeResult };
         console.log(`ELECTRON_SMOKE_RESULT=${JSON.stringify(combined)}`);
         app.exit(
           gameplayResult?.active
             && gameplayResult?.playerCount === 2
             && gameplayResult?.enemySystemReady
             && gameplayResult?.publisherReady
+            && resizeResult?.anchoredX
+            && resizeResult?.anchoredY
             && !result.startupError
             ? 0 : 1,
         );

@@ -1,19 +1,22 @@
 import {
+  ARENA_PLAYABLE_HALF_SIZE,
   RUNE_CHARGE_DURATION_MS,
   RUNE_CHARGE_RADIUS,
   RUNE_ROLL_INTERVAL_SECONDS,
   RUNE_SHIELD_BLOCK_COUNT,
   TILE_SIZE,
-  WORLD_SIZE,
 } from '../config/constants';
 import { RuneChargeGauge } from '../objects/RuneChargeGauge';
 import { ShieldChargeCounter } from '../objects/ShieldChargeCounter';
+import { ShieldPresentation } from '../objects/ShieldPresentation';
 import { MultiAttackPresentation } from '../objects/MultiAttackPresentation';
+import { RuneActivationPresentation } from '../objects/RuneActivationPresentation';
 import { RuneChallenge } from '../ui/RuneChallenge';
-import { UI_COLORS } from '../ui/theme';
 import type { AudioManager } from './AudioManager';
 import type { PlayerController } from './PlayerController';
 import { getRuneSpawnChance } from './runeSpawn';
+import { MULTI_ATTACK_BOSS_DAMAGE_RATIO, multiAttackDamage } from './runeAttack';
+import { runeDropVisualState, runeTextureKey } from './runeDrop';
 import type { EnemySprite, RuneSprite, RuneType, RunProgress } from './types';
 
 interface RuneSystemOptions {
@@ -24,8 +27,6 @@ interface RuneSystemOptions {
   showToast: (message: string, isError?: boolean) => void;
 }
 
-type FollowEffect = SpineGameObject | Phaser.GameObjects.Arc;
-
 /** Owns timed rune drops, collection challenges, and temporary rune effects. */
 export class RuneSystem {
   readonly runes: Phaser.Physics.Arcade.Group;
@@ -34,7 +35,7 @@ export class RuneSystem {
   private chargingRune?: RuneSprite;
   private chargeGauge?: RuneChargeGauge;
   private chargeElapsedMs = 0;
-  private shieldEffect?: FollowEffect;
+  private shieldPresentation?: ShieldPresentation;
   private shieldCounter?: ShieldChargeCounter;
   private shieldCharges = 0;
   private multiAttackGuardUntil = 0;
@@ -50,13 +51,14 @@ export class RuneSystem {
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.challenge?.destroy();
       this.chargeGauge?.destroy();
-      this.shieldEffect?.destroy();
+      this.shieldPresentation?.destroy(false);
       this.shieldCounter?.destroy();
     });
   }
 
   update(delta: number): void {
     this.rollRuneSpawn();
+    this.updateRuneAppearances();
     this.updateRuneCharge(delta);
     this.updateShieldPresentation();
   }
@@ -65,23 +67,13 @@ export class RuneSystem {
     if (this.scene.time.now < this.multiAttackGuardUntil) return true;
     if (this.shieldCharges <= 0) return false;
     this.shieldCharges--;
-    this.shieldCounter?.setCharges(this.shieldCharges);
-    this.audio.effects.spring.play();
-    const blockFlash = this.scene.add.circle(
+    this.shieldPresentation?.sync(
       this.player.sprite.x,
       this.player.sprite.y,
-      54,
-      UI_COLORS.white,
-      0.26,
-    ).setDepth(30);
-    this.scene.tweens.add({
-      targets: blockFlash,
-      scaleX: 1.18,
-      scaleY: 1.18,
-      alpha: 0,
-      duration: 140,
-      onComplete: () => blockFlash.destroy(),
-    });
+      this.shieldCharges,
+    );
+    this.shieldCounter?.setCharges(this.shieldCharges);
+    this.audio.effects.spring.play();
     if (this.shieldCharges <= 0) this.endShield();
     return true;
   }
@@ -101,7 +93,7 @@ export class RuneSystem {
   private spawnRune(): RuneSprite {
     const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
     const distance = Phaser.Math.Between(190, 330);
-    const halfWorld = WORLD_SIZE / 2 - TILE_SIZE;
+    const halfWorld = ARENA_PLAYABLE_HALF_SIZE - TILE_SIZE;
     const x = Phaser.Math.Clamp(
       this.player.sprite.x + Math.cos(angle) * distance,
       -halfWorld,
@@ -112,8 +104,12 @@ export class RuneSystem {
       -halfWorld,
       halfWorld,
     );
-    const rune = this.runes.create(x, y, 'rune') as RuneSprite;
+    const rune = this.runes.create(x, y, 'runeEmbedded') as RuneSprite;
     rune.runeType = Math.random() < 0.5 ? 'multiAttack' : 'shield';
+    rune.runeSpawnedAt = this.scene.time.now;
+    rune.runeAnchorY = y;
+    rune.runeAvailable = false;
+    rune.runePhase = 'embedded';
     rune.setDepth(7).setDisplaySize(62, 62);
     (rune.body as Phaser.Physics.Arcade.Body).setCircle(72, 24, 24);
     this.scene.tweens.add({
@@ -125,8 +121,22 @@ export class RuneSystem {
       ease: 'Sine.easeInOut',
     });
     const label = rune.runeType === 'multiAttack' ? '다중 공격' : '보호막';
-    this.options.showToast(`${label} 룬 등장 · 룬 위에서 3초간 머무르세요.`);
+    this.options.showToast(`${label} 룬 등장 · 3초 뒤 솟아오르면 룬 위에 머무르세요.`);
     return rune;
+  }
+
+  private updateRuneAppearances(): void {
+    const now = this.scene.time.now;
+    (this.runes.getChildren() as RuneSprite[]).forEach((rune) => {
+      if (!rune.active) return;
+      const visual = runeDropVisualState(now - rune.runeSpawnedAt);
+      if (rune.runePhase !== visual.phase) {
+        rune.runePhase = visual.phase;
+        rune.setTexture(runeTextureKey(visual.phase));
+      }
+      rune.runeAvailable = visual.available;
+      rune.y = rune.runeAnchorY + visual.offsetY;
+    });
   }
 
   private updateRuneCharge(delta: number): void {
@@ -163,7 +173,7 @@ export class RuneSystem {
     let nearestRune: RuneSprite | undefined;
     let nearestDistance = RUNE_CHARGE_RADIUS;
     (this.runes.getChildren() as RuneSprite[]).forEach((rune) => {
-      if (!rune.active) return;
+      if (!rune.active || !rune.runeAvailable) return;
       const distance = Phaser.Math.Distance.Between(playerX, playerY, rune.x, rune.y);
       if (distance > nearestDistance) return;
       nearestDistance = distance;
@@ -195,6 +205,7 @@ export class RuneSystem {
   }
 
   private activateRune(runeType: RuneType): void {
+    RuneActivationPresentation.play(this.scene, runeType);
     if (runeType === 'multiAttack') {
       this.activateMultiAttack();
       return;
@@ -203,7 +214,6 @@ export class RuneSystem {
   }
 
   private activateMultiAttack(): void {
-    const baseDamage = Math.max(100, this.player.stats.level * 20);
     const enemies = this.options.getEnemies();
     this.multiAttackGuardUntil = this.scene.time.now + MultiAttackPresentation.durationMs;
     this.audio.effects.multiAttack.play();
@@ -214,22 +224,26 @@ export class RuneSystem {
       {
         targets: enemies,
         onImpact: (enemy) => {
-          if (!enemy.active) return;
-          const damage = enemy.enemyType === 'boss'
-            ? Math.max(baseDamage, Math.ceil(enemy.maxHp * 0.1))
-            : enemy.hp;
-          this.options.damageEnemy(enemy, damage);
+          if (!enemy.active || this.player.isBossSuccessActive) return;
+          this.options.damageEnemy(enemy, multiAttackDamage(enemy, this.player.stats.level));
         },
       },
     );
-    this.options.showToast('다중 공격 발동 · 일반 몬스터 전멸, 보스 최대 HP 10% 피해');
+    this.options.showToast(
+      `다중 공격 발동 · 일반 몬스터 전멸, 보스 최대 HP ${MULTI_ATTACK_BOSS_DAMAGE_RATIO * 100}% 강타`,
+    );
   }
 
   private activateShield(): void {
     this.shieldCharges = RUNE_SHIELD_BLOCK_COUNT;
-    this.shieldEffect?.destroy();
+    this.shieldPresentation?.destroy(false);
     this.shieldCounter?.destroy();
-    this.shieldEffect = this.createShieldEffect();
+    this.shieldPresentation = new ShieldPresentation(
+      this.scene,
+      this.player.sprite.x,
+      this.player.sprite.y,
+      this.shieldCharges,
+    );
     this.shieldCounter = new ShieldChargeCounter(
       this.scene,
       this.player.sprite.x,
@@ -241,39 +255,19 @@ export class RuneSystem {
     this.options.showToast('보호막 발동 · 공격을 10회 막아냅니다.');
   }
 
-  private createShieldEffect(): FollowEffect {
-    const { x, y } = this.player.sprite;
-    if (this.scene.game.renderer.type === Phaser.WEBGL) {
-      try {
-        return this.scene.add.spine(
-          x,
-          y + 18,
-          'runeShield',
-          'animation',
-          true,
-        ).setDepth(6).setScale(0.42);
-      } catch (error) {
-        console.warn('Shield Spine effect failed, using fallback:', error);
-      }
-    }
-    return this.scene.add.circle(x, y, 54, UI_COLORS.primary, 0.14)
-      .setStrokeStyle(3, UI_COLORS.white, 0.78)
-      .setDepth(6);
-  }
-
   private updateShieldPresentation(): void {
     if (this.shieldCharges <= 0) return;
-    this.shieldEffect?.setPosition(
+    this.shieldPresentation?.setPosition(
       this.player.sprite.x,
-      this.player.sprite.y + (this.shieldEffect instanceof Phaser.GameObjects.Arc ? 0 : 18),
+      this.player.sprite.y,
     );
     this.shieldCounter?.setPosition(this.player.sprite.x, this.player.sprite.y);
   }
 
   private endShield(): void {
     this.shieldCharges = 0;
-    this.shieldEffect?.destroy();
-    this.shieldEffect = undefined;
+    this.shieldPresentation?.destroy(true);
+    this.shieldPresentation = undefined;
     this.shieldCounter?.destroy();
     this.shieldCounter = undefined;
     this.options.showToast('보호막을 모두 사용했습니다.');

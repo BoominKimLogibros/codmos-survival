@@ -1,5 +1,6 @@
 import {
   ADAPTIVE_MAX_ENEMIES,
+  ARENA_PLAYABLE_HALF_SIZE,
   BOSS_EVOLUTION_MULTIPLIER,
   BOSS_XP_REWARD_BASE,
   BOSS_XP_REWARD_MULTIPLIER,
@@ -13,20 +14,57 @@ import {
   SHIELD_KNOCKBACK_DURATION_MS,
   SHIELD_KNOCKBACK_SPEED,
   TILE_SIZE,
-  WORLD_SIZE,
 } from '../config/constants';
 import { createEnemySprite } from '../objects/Enemy';
 import { EnemyHealthBar } from '../objects/EnemyHealthBar';
 import { BossPresentation } from '../objects/BossPresentation';
+import { MonsterPortalPresentation } from '../objects/MonsterPortalPresentation';
 import { uiTextStyle } from '../ui/theme';
 import type { AudioManager } from './AudioManager';
 import type { PlayerController } from './PlayerController';
 import type { WeaponSystem } from './WeaponSystem';
-import { AdaptiveDifficultyController } from './AdaptiveDifficultyController';
+import {
+  BOSS_XP_REWARD_DISPLAY_HEIGHT,
+  BOSS_XP_REWARD_DISPLAY_WIDTH,
+  BOSS_XP_REWARD_PICKUP_SIZE,
+  BOSS_XP_REWARD_TEXTURE_KEY,
+  regularXpDropSize,
+  type XpDropKind,
+} from './xpDrop';
+import {
+  AdaptiveDifficultyController,
+  scaleHealthPreservingRatio,
+  strongestDifficultyGrowthProfile,
+  type DifficultyGrowthProfile,
+} from './AdaptiveDifficultyController';
+import {
+  consumeDamageContact,
+  consumeDamageSourceCooldown,
+  pruneDamageContacts,
+} from './damageCooldown';
+import { shouldApplyKnockback } from './knockback';
+import {
+  MONSTER_PORTAL_DURATION_MS,
+  isMonsterEnteringPortal,
+} from './enemySpawn';
+import {
+  BOSS_CONTACT_DAMAGE_MULTIPLIER,
+  BOSS_CONTACT_INTERVAL_MS,
+  BOSS_ENTRY_DURATION_MS,
+  bossEntryRemainingMs,
+  bossContactDamage,
+  bossProfileForTier,
+  clampBossAttackTarget,
+  isBossEntering,
+  isPointInBossAttack,
+  type BossAttackVisualState,
+  type BossBehaviorProfile,
+} from './bossBehavior';
 import type {
   DamageSprite,
   DropSprite,
   EnemyDefinition,
+  EnemyKnockback,
   EnemySprite,
   EnemyType,
   MonsterFrames,
@@ -41,7 +79,9 @@ interface EnemySystemOptions {
   isGameOver: () => boolean;
   tryBlockPlayerHit: (player: PlayerController, enemy: EnemySprite) => boolean;
   getPlayers?: () => PlayerController[];
+  getDifficultyGrowthProfiles?: () => DifficultyGrowthProfile[];
   onSharedXp?: (value: number, collector: PlayerController) => void;
+  onBossKilled?: (enemy: EnemySprite) => void;
 }
 
 interface RuntimeTintSprite {
@@ -88,6 +128,8 @@ function restoreEnemyTint(enemy: EnemySprite): void {
 const REGULAR_ENEMY_TYPES = new Set<EnemyType>(['basic', 'fast', 'tank']);
 const MAX_ACTIVE_XP_DROPS = 800;
 const MAX_ACTIVE_HEALTH_DROPS = 120;
+const HEALTH_DROP_WIDTH = 27;
+const HEALTH_DROP_HEIGHT = 30;
 const MAX_HIT_FEEDBACK_PER_SECOND = 60;
 const MAX_DEATH_EFFECTS_PER_SECOND = 40;
 const CAMERA_EFFECT_MARGIN = 120;
@@ -120,6 +162,10 @@ export class EnemySystem {
   private deathEffectCount = 0;
   private readonly connectedPlayers = new WeakSet<PlayerController>();
   private readonly connectedWeapons = new WeakSet<WeaponSystem>();
+  private readonly meleeHitTimes = new WeakMap<EnemySprite, Map<string, number>>();
+  private readonly meleeContactFrames = new WeakMap<EnemySprite, Map<string, number>>();
+  private readonly bossContactTimes = new WeakMap<EnemySprite, WeakMap<PlayerController, number>>();
+  private meleeContactFrame = 0;
   private environmentEnemiesConnected = false;
   private waterEnemiesConnected = false;
 
@@ -210,6 +256,8 @@ export class EnemySystem {
   }
 
   update(delta: number): void {
+    this.meleeContactFrame++;
+    this.pruneMeleeContacts();
     this.updateSpawning(delta);
     this.updateAi();
     this.updateMagnet();
@@ -218,6 +266,40 @@ export class EnemySystem {
 
   getActiveEnemies(): EnemySprite[] {
     return (this.enemies.getChildren() as EnemySprite[]).filter((enemy) => enemy.active);
+  }
+
+  getBossAttackVisualState(enemy: EnemySprite): BossAttackVisualState | null {
+    if (enemy.enemyType !== 'boss') return null;
+    if (isBossEntering(enemy.bossSpawnEndsAt, this.scene.time.now)) return null;
+    const phase = enemy.bossAttackPhase ?? 'chase';
+    const startedAt = enemy.bossAttackStartedAt ?? this.scene.time.now;
+    const endsAt = enemy.bossAttackEndsAt ?? startedAt;
+    const duration = Math.max(1, endsAt - startedAt);
+    const progress = phase === 'windup' || phase === 'attack'
+      ? Phaser.Math.Clamp((this.scene.time.now - startedAt) / duration, 0, 1)
+      : 0;
+    return {
+      phase,
+      revision: enemy.bossAttackRevision ?? 0,
+      progress,
+      originX: enemy.bossAttackOriginX ?? enemy.x,
+      originY: enemy.bossAttackOriginY ?? enemy.y,
+      targetX: enemy.bossAttackTargetX ?? enemy.x,
+      targetY: enemy.bossAttackTargetY ?? enemy.y,
+      radius: enemy.bossAttackRadius ?? 0,
+      style: enemy.bossAttackStyle ?? bossProfileForTier(enemy.bossTier ?? 1).attackStyle,
+    };
+  }
+
+  getBossEntryRemainingMs(enemy: EnemySprite): number {
+    if (enemy.enemyType !== 'boss') return 0;
+    return bossEntryRemainingMs(enemy.bossSpawnEndsAt, this.scene.time.now);
+  }
+
+  getMonsterPortalNetworkEndsAt(enemy: EnemySprite): number {
+    if (enemy.enemyType === 'boss') return 0;
+    if (!isMonsterEnteringPortal(enemy.portalSpawnEndsAt, this.scene.time.now)) return 0;
+    return enemy.portalSpawnNetworkEndsAt ?? 0;
   }
 
   reduceDifficultyAfterDeath(): number {
@@ -242,32 +324,57 @@ export class EnemySystem {
           pendingBossTier > completed &&
           !this.getActiveEnemies().some((enemy) => enemy.enemyType === 'boss')
         ) {
-          this.spawnBoss(pendingBossTier, true);
+          this.spawnBossWave(pendingBossTier, true);
         }
       });
       return true;
     }
-    this.spawnBoss(pendingBossTier, true);
+    this.spawnBossWave(pendingBossTier, true);
     return true;
   }
 
-  damageEnemy(enemy: EnemySprite, damage: number): void {
+  damageEnemy(enemy: EnemySprite, damage: number, knockback?: EnemyKnockback): void {
     if (!enemy.active) return;
+    if (enemy.enemyType === 'boss' && isBossEntering(
+      enemy.bossSpawnEndsAt,
+      this.scene.time.now,
+    )) return;
+    if (enemy.enemyType !== 'boss' && isMonsterEnteringPortal(
+      enemy.portalSpawnEndsAt,
+      this.scene.time.now,
+    )) return;
+    if (knockback) this.applyEnemyKnockback(enemy, knockback);
     enemy.hp -= damage;
     enemy.hitRevision = (enemy.hitRevision ?? 0) + 1;
+    if (enemy.enemyType === 'boss') enemy.presentation?.showDamageFeedback();
     if (this.isWithinCamera(enemy.x, enemy.y) && this.consumeHitFeedbackBudget()) {
-      enemy.presentation?.showDamageFeedback();
-      applyWhiteHitTint(enemy);
-      this.scene.time.delayedCall(80, () => {
-        if (!enemy.active) return;
-        restoreEnemyTint(enemy);
-      });
+      if (enemy.enemyType !== 'boss') enemy.presentation?.showDamageFeedback();
+      if (!enemy.presentation) {
+        applyWhiteHitTint(enemy);
+        this.scene.time.delayedCall(80, () => {
+          if (!enemy.active) return;
+          restoreEnemyTint(enemy);
+        });
+      }
       this.showFloatingText(enemy.x, enemy.y - 10, damage, '#d4d7de');
     }
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
 
   private updateSpawning(delta: number): void {
+    const growth = strongestDifficultyGrowthProfile(
+      this.options.getDifficultyGrowthProfiles?.() ?? [{
+        level: this.player.stats.level,
+        enhancementLevel: 0,
+      }],
+    );
+    const growthAdjustment = this.difficulty.syncPlayerGrowth(growth);
+    if (growthAdjustment) {
+      if (growthAdjustment.hpScaleRatio !== 1) {
+        this.rescaleNonBossEnemyHp(growthAdjustment.hpScaleRatio);
+      }
+      this.options.showToast(growthAdjustment.message);
+    }
     const regularCount = this.activeRegularEnemyCount();
     const adjustment = this.difficulty.update(
       delta,
@@ -275,7 +382,7 @@ export class EnemySystem {
       this.progress.normalKillCount,
     );
     if (adjustment) {
-      if (adjustment.hpScaleRatio !== 1) this.rescaleRegularEnemyHp(adjustment.hpScaleRatio);
+      if (adjustment.hpScaleRatio !== 1) this.rescaleNonBossEnemyHp(adjustment.hpScaleRatio);
       if (adjustment.message) this.options.showToast(adjustment.message);
     }
 
@@ -323,20 +430,19 @@ export class EnemySystem {
       this.progress.lastBossKillMilestone,
       this.progress.bossGeneration + 1,
     );
-    this.spawnBoss();
+    this.spawnBossWave();
     return true;
   }
 
   private getWorldEdgeSpawnPosition(angle: number): { x: number; y: number } {
-    const halfWorld = WORLD_SIZE / 2;
     const directionX = Math.cos(angle);
     const directionY = Math.sin(angle);
-    const distanceToWorldEdge = halfWorld / Math.max(
+    const spawnBoundary = ARENA_PLAYABLE_HALF_SIZE - TILE_SIZE * 0.75;
+    const distanceToWorldEdge = spawnBoundary / Math.max(
       Math.abs(directionX),
       Math.abs(directionY),
     );
-    const outsideMargin = Phaser.Math.FloatBetween(TILE_SIZE * 0.75, TILE_SIZE * 1.75);
-    const distance = distanceToWorldEdge + outsideMargin;
+    const distance = distanceToWorldEdge - Phaser.Math.FloatBetween(0, TILE_SIZE * 0.5);
     return { x: directionX * distance, y: directionY * distance };
   }
 
@@ -365,7 +471,7 @@ export class EnemySystem {
         frames,
         scale: definition.scale,
         enemyType,
-        collideWorldBounds: false,
+        collideWorldBounds: true,
       });
       enemy.normalGeneration = this.progress.normalGeneration;
       enemy.maxHp = Math.max(1, Math.floor(definition.hp * effectiveHpMultiplier));
@@ -377,70 +483,34 @@ export class EnemySystem {
         definition.xp * Math.sqrt(effectiveHpMultiplier),
       ));
       enemy.lastDmgT = 0;
+      this.beginMonsterPortalEntry(enemy);
       this.createHealthBar(enemy);
       this.progress.normalSpawnedInGeneration++;
     }
     return batchSize;
   }
 
-  private spawnBoss(
+  private spawnBossWave(
     tier = this.progress.bossGeneration + 1,
     isResumedBoss = false,
   ): void {
-    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-    const halfWorld = WORLD_SIZE / 2 - TILE_SIZE;
-    const targetPlayer = this.livingPlayers()[0] ?? this.player;
-    const x = Phaser.Math.Clamp(
-      targetPlayer.sprite.x + Math.cos(angle) * 500,
-      -halfWorld,
-      halfWorld,
-    );
-    const y = Phaser.Math.Clamp(
-      targetPlayer.sprite.y + Math.sin(angle) * 500,
-      -halfWorld,
-      halfWorld,
-    );
-    const definition = this.definitions.boss;
-    const power = Math.pow(BOSS_EVOLUTION_MULTIPLIER, tier - 1);
-    const boss = createEnemySprite(this.scene, this.enemies, {
-      x,
-      y,
-      frames: definition.frames,
-      scale: definition.scale,
-      enemyType: 'boss',
-      bodyRadius: 50,
-    });
-    boss.bossTier = tier;
-    boss.maxHp = Math.max(1, Math.floor(
-      definition.hp * power * this.progress.adaptiveDifficulty.deathDifficultyMultiplier,
-    ));
-    boss.hp = boss.maxHp;
-    boss.speed = definition.speed;
-    // Boss tiers increase durability only. Keeping contact damage fixed prevents
-    // a resumed high-tier boss from defeating the player in a single hit.
-    boss.damage = definition.damage;
-    boss.xpValue = Math.max(
-      BOSS_XP_REWARD_BASE,
-      Math.floor(BOSS_XP_REWARD_BASE * Math.pow(BOSS_XP_REWARD_MULTIPLIER, tier - 1)),
-    );
-    boss.lastDmgT = 0;
-    boss.normalGeneration = this.progress.normalGeneration;
-    boss.presentation = BossPresentation.create(this.scene, x, y, tier);
-    if (boss.presentation instanceof BossPresentation) {
-      boss.setAlpha(0).setDisplaySize(
-        boss.presentation.visualHeight,
-        boss.presentation.visualHeight,
-      );
+    const availableSlots = Math.max(1, ADAPTIVE_MAX_ENEMIES - this.enemies.countActive());
+    const bossCount = Math.min(this.difficulty.effectiveBossCount(), availableSlots);
+    const initialAngle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+    for (let index = 0; index < bossCount; index++) {
+      this.spawnBoss(tier, initialAngle + (Math.PI * 2 * index) / bossCount);
     }
-    this.progress.bossGeneration = Math.max(this.progress.bossGeneration, tier);
-    this.createHealthBar(boss);
 
+    const behavior = bossProfileForTier(tier);
+    const countLabel = bossCount > 1 ? ` · 동시 ${bossCount}마리` : '';
     const announcement = this.scene.add.text(
       this.scene.scale.gameSize.width / 2,
       80,
-      isResumedBoss ? `보스 ${tier}단계 이어서 등장!` : `보스 ${tier}단계 등장!`,
+      `${isResumedBoss ? `보스 ${tier}단계 이어서 등장` : `보스 ${tier}단계 등장`}${countLabel}\n` +
+      `${behavior.name} · ${behavior.trait}`,
       {
         ...uiTextStyle({ fontSize: '24px', color: '#ffffff', fontStyle: '800' }),
+        align: 'center',
         stroke: '#6c5ce7',
         strokeThickness: 3,
       },
@@ -455,6 +525,86 @@ export class EnemySystem {
     this.audio.effects.scream.play();
   }
 
+  private spawnBoss(tier: number, angle: number): void {
+    const halfWorld = ARENA_PLAYABLE_HALF_SIZE - TILE_SIZE;
+    const targetPlayer = this.livingPlayers()[0] ?? this.player;
+    const x = Phaser.Math.Clamp(
+      targetPlayer.sprite.x + Math.cos(angle) * 500,
+      -halfWorld,
+      halfWorld,
+    );
+    const y = Phaser.Math.Clamp(
+      targetPlayer.sprite.y + Math.sin(angle) * 500,
+      -halfWorld,
+      halfWorld,
+    );
+    const definition = this.definitions.boss;
+    const behavior = bossProfileForTier(tier);
+    const power = Math.pow(BOSS_EVOLUTION_MULTIPLIER, tier - 1);
+    const boss = createEnemySprite(this.scene, this.enemies, {
+      x,
+      y,
+      frames: definition.frames,
+      scale: definition.scale,
+      enemyType: 'boss',
+      bodyRadius: 50,
+    });
+    boss.bossTier = tier;
+    boss.maxHp = Math.max(1, Math.floor(
+      definition.hp * behavior.hpMultiplier * power *
+      this.progress.adaptiveDifficulty.deathDifficultyMultiplier,
+    ));
+    boss.hp = boss.maxHp;
+    boss.speed = definition.speed * behavior.speedMultiplier;
+    boss.damage = Math.max(1, Math.round(definition.damage * behavior.damageMultiplier));
+    boss.xpValue = Math.max(
+      BOSS_XP_REWARD_BASE,
+      Math.floor(BOSS_XP_REWARD_BASE * Math.pow(BOSS_XP_REWARD_MULTIPLIER, tier - 1)),
+    );
+    boss.lastDmgT = 0;
+    boss.normalGeneration = this.progress.normalGeneration;
+    boss.bossSpawnEndsAt = this.scene.time.now + BOSS_ENTRY_DURATION_MS;
+    boss.bossAttackPhase = 'chase';
+    boss.bossAttackRevision = 0;
+    boss.bossAttackCooldownUntil = boss.bossSpawnEndsAt + 700;
+    boss.bossAttackOriginX = x;
+    boss.bossAttackOriginY = y;
+    boss.bossAttackTargetX = x;
+    boss.bossAttackTargetY = y;
+    boss.bossAttackRadius = behavior.hitRadius;
+    boss.bossAttackStyle = behavior.attackStyle;
+    boss.presentation = BossPresentation.create(
+      this.scene,
+      x,
+      y,
+      tier,
+      BOSS_ENTRY_DURATION_MS,
+    );
+    if (boss.presentation instanceof BossPresentation) {
+      boss.setAlpha(0).setDisplaySize(
+        boss.presentation.visualHeight,
+        boss.presentation.visualHeight,
+      );
+    } else {
+      boss.setVisible(false);
+    }
+    const body = boss.body as Phaser.Physics.Arcade.Body;
+    body.enable = false;
+    boss.setVelocity(0, 0);
+    this.scene.time.delayedCall(BOSS_ENTRY_DURATION_MS, () => {
+      if (!boss.active) return;
+      const activeBody = boss.body as Phaser.Physics.Arcade.Body | null;
+      if (activeBody) activeBody.enable = true;
+      boss.bossAttackCooldownUntil = this.scene.time.now + 700;
+      if (!boss.presentation) boss.setVisible(true);
+      // The scene update can cross the entry boundary in the same frame as
+      // this timer. Use the idempotent sync path so two HP bars cannot be
+      // created with one orphaned at the original spawn position.
+      this.syncHealthBar(boss);
+    });
+    this.progress.bossGeneration = Math.max(this.progress.bossGeneration, tier);
+  }
+
   private spawnCompressedEnemy(): EnemySprite {
     const base = this.definitions.basic;
     const hpMultiplier = this.difficulty.effectiveHpMultiplier();
@@ -465,7 +615,7 @@ export class EnemySystem {
     ));
     const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
     const distance = Phaser.Math.Between(300, 450);
-    const halfWorld = WORLD_SIZE / 2 - TILE_SIZE;
+    const halfWorld = ARENA_PLAYABLE_HALF_SIZE - TILE_SIZE;
     const targetPlayer = this.livingPlayers()[0] ?? this.player;
     const x = Phaser.Math.Clamp(
       targetPlayer.sprite.x + Math.cos(angle) * distance,
@@ -493,6 +643,7 @@ export class EnemySystem {
     enemy.damage = baseDamage * COMPRESSED_ATTACK_MULTIPLIER;
     enemy.xpValue = baseXp * COMPRESSED_EQUIVALENT_MONSTERS;
     enemy.lastDmgT = 0;
+    this.beginMonsterPortalEntry(enemy);
     this.createHealthBar(enemy);
     this.options.showToast('희귀 5배 거대 몬스터 등장!');
     return enemy;
@@ -507,14 +658,182 @@ export class EnemySystem {
           < Phaser.Math.Distance.Squared(enemy.x, enemy.y, nearest.sprite.x, nearest.sprite.y)
           ? candidate : nearest
       ), players[0]);
-      if ((enemy.knockbackUntil ?? 0) <= this.scene.time.now) {
+      if (enemy.enemyType !== 'boss' && isMonsterEnteringPortal(
+        enemy.portalSpawnEndsAt,
+        this.scene.time.now,
+      )) {
+        enemy.setVelocity(0, 0);
+        enemy.spawnPresentation?.sync(enemy.x, enemy.y);
+        return;
+      }
+      if (enemy.enemyType === 'boss') {
+        this.updateBossAi(enemy, target);
+      } else if ((enemy.knockbackUntil ?? 0) <= this.scene.time.now) {
         const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, target.sprite.x, target.sprite.y);
         enemy.setVelocity(Math.cos(angle) * enemy.speed, Math.sin(angle) * enemy.speed);
       }
       const movingLeft = (enemy.body as Phaser.Physics.Arcade.Body).velocity.x < 0;
       enemy.setFlipX(movingLeft);
       enemy.presentation?.sync(enemy.x, enemy.y, movingLeft);
+      enemy.presentation?.syncBossAttack?.(this.getBossAttackVisualState(enemy));
       this.syncHealthBar(enemy);
+    });
+  }
+
+  private updateBossAi(enemy: EnemySprite, target: PlayerController): void {
+    const now = this.scene.time.now;
+    if (isBossEntering(enemy.bossSpawnEndsAt, now)) {
+      enemy.setVelocity(0, 0);
+      return;
+    }
+    const behavior = bossProfileForTier(enemy.bossTier ?? 1);
+    const phase = enemy.bossAttackPhase ?? 'chase';
+
+    if (phase === 'windup') {
+      enemy.setVelocity(0, 0);
+      if (now >= (enemy.bossAttackEndsAt ?? now)) {
+        this.beginBossAttackImpact(enemy, behavior, now);
+      }
+      return;
+    }
+
+    if (enemy.bossAttackPhase === 'attack') {
+      this.updateBossAttackImpact(enemy, behavior, now);
+      return;
+    }
+
+    if (phase === 'recover') {
+      enemy.setVelocity(0, 0);
+      if (now >= (enemy.bossAttackEndsAt ?? now)) enemy.bossAttackPhase = 'chase';
+      return;
+    }
+
+    if ((enemy.knockbackUntil ?? 0) > now) return;
+    const distance = Phaser.Math.Distance.Between(
+      enemy.x,
+      enemy.y,
+      target.sprite.x,
+      target.sprite.y,
+    );
+    if (distance <= behavior.triggerRange && now >= (enemy.bossAttackCooldownUntil ?? 0)) {
+      this.beginBossAttackWindup(enemy, target, behavior, now);
+      return;
+    }
+
+    const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, target.sprite.x, target.sprite.y);
+    enemy.setVelocity(Math.cos(angle) * enemy.speed, Math.sin(angle) * enemy.speed);
+  }
+
+  private beginBossAttackWindup(
+    enemy: EnemySprite,
+    target: PlayerController,
+    behavior: BossBehaviorProfile,
+    now: number,
+  ): void {
+    const originX = enemy.x;
+    const originY = enemy.y;
+    let targetX = originX;
+    let targetY = originY;
+    if (behavior.attackStyle === 'magic') {
+      targetX = target.sprite.x;
+      targetY = target.sprite.y;
+    } else if (behavior.attackStyle === 'dash') {
+      const clamped = clampBossAttackTarget(
+        originX,
+        originY,
+        target.sprite.x,
+        target.sprite.y,
+        behavior.maxTravel,
+      );
+      targetX = clamped.x;
+      targetY = clamped.y;
+    }
+    enemy.bossAttackPhase = 'windup';
+    enemy.bossAttackRevision = (enemy.bossAttackRevision ?? 0) + 1;
+    enemy.bossAttackStartedAt = now;
+    enemy.bossAttackEndsAt = now + behavior.windupMs;
+    enemy.bossAttackOriginX = originX;
+    enemy.bossAttackOriginY = originY;
+    enemy.bossAttackTargetX = targetX;
+    enemy.bossAttackTargetY = targetY;
+    enemy.bossAttackRadius = behavior.hitRadius;
+    enemy.bossAttackStyle = behavior.attackStyle;
+    enemy.bossAttackHitPlayers = new WeakSet<object>();
+    enemy.setVelocity(0, 0);
+  }
+
+  private beginBossAttackImpact(
+    enemy: EnemySprite,
+    behavior: BossBehaviorProfile,
+    now: number,
+  ): void {
+    enemy.bossAttackPhase = 'attack';
+    enemy.bossAttackStartedAt = now;
+    enemy.bossAttackEndsAt = now + behavior.attackMs;
+    if (behavior.attackStyle === 'dash') {
+      const dx = (enemy.bossAttackTargetX ?? enemy.x) - (enemy.bossAttackOriginX ?? enemy.x);
+      const dy = (enemy.bossAttackTargetY ?? enemy.y) - (enemy.bossAttackOriginY ?? enemy.y);
+      const durationSeconds = Math.max(0.001, behavior.attackMs / 1_000);
+      this.damagePlayersInCurrentBossArea(enemy);
+      enemy.setVelocity(dx / durationSeconds, dy / durationSeconds);
+      return;
+    }
+    enemy.setVelocity(0, 0);
+    this.damagePlayersInCurrentBossArea(enemy);
+  }
+
+  private updateBossAttackImpact(
+    enemy: EnemySprite,
+    behavior: BossBehaviorProfile,
+    now: number,
+  ): void {
+    if (behavior.attackStyle === 'dash') this.damagePlayersNearDashingBoss(enemy, behavior.hitRadius);
+    if (now < (enemy.bossAttackEndsAt ?? now)) return;
+    if (behavior.attackStyle === 'dash') {
+      enemy.setPosition(
+        enemy.bossAttackTargetX ?? enemy.x,
+        enemy.bossAttackTargetY ?? enemy.y,
+      );
+      this.damagePlayersNearDashingBoss(enemy, behavior.hitRadius);
+    }
+    enemy.setVelocity(0, 0);
+    enemy.bossAttackPhase = 'recover';
+    enemy.bossAttackStartedAt = now;
+    enemy.bossAttackEndsAt = now + behavior.recoveryMs;
+    enemy.bossAttackCooldownUntil = now + behavior.recoveryMs + behavior.cooldownMs;
+  }
+
+  private damagePlayersInCurrentBossArea(enemy: EnemySprite): void {
+    const style = enemy.bossAttackStyle ?? 'slam';
+    const originX = enemy.bossAttackOriginX ?? enemy.x;
+    const originY = enemy.bossAttackOriginY ?? enemy.y;
+    const targetX = enemy.bossAttackTargetX ?? enemy.x;
+    const targetY = enemy.bossAttackTargetY ?? enemy.y;
+    const radius = enemy.bossAttackRadius ?? 0;
+    this.livingPlayers().forEach((player) => {
+      if (!isPointInBossAttack(
+        style,
+        player.sprite.x,
+        player.sprite.y,
+        originX,
+        originY,
+        targetX,
+        targetY,
+        radius,
+      )) return;
+      this.damagePlayerFromEnemy(player, enemy);
+    });
+  }
+
+  private damagePlayersNearDashingBoss(enemy: EnemySprite, radius: number): void {
+    this.livingPlayers().forEach((player) => {
+      if (Phaser.Math.Distance.Squared(
+        enemy.x,
+        enemy.y,
+        player.sprite.x,
+        player.sprite.y,
+      ) > radius * radius) return;
+      this.damagePlayerFromEnemy(player, enemy);
     });
   }
 
@@ -536,8 +855,41 @@ export class EnemySystem {
   }
 
   private onEnemyHit(player: PlayerController, enemy: EnemySprite): void {
-    if (this.options.isGameOver()) return;
-    if (!player.tryBeginHitWindow()) return;
+    if (enemy.enemyType === 'boss') {
+      if (
+        isBossEntering(enemy.bossSpawnEndsAt, this.scene.time.now) ||
+        enemy.bossAttackPhase === 'attack'
+      ) return;
+      let playerContactTimes = this.bossContactTimes.get(enemy);
+      if (!playerContactTimes) {
+        playerContactTimes = new WeakMap();
+        this.bossContactTimes.set(enemy, playerContactTimes);
+      }
+      const now = this.scene.time.now;
+      if (now < (playerContactTimes.get(player) ?? 0)) return;
+      if (this.damagePlayerFromEnemy(
+        player,
+        enemy,
+        BOSS_CONTACT_DAMAGE_MULTIPLIER,
+        false,
+      )) {
+        playerContactTimes.set(player, now + BOSS_CONTACT_INTERVAL_MS);
+      }
+      return;
+    }
+    this.damagePlayerFromEnemy(player, enemy);
+  }
+
+  private damagePlayerFromEnemy(
+    player: PlayerController,
+    enemy: EnemySprite,
+    damageMultiplier = 1,
+    trackBossAttackHit = true,
+  ): boolean {
+    if (trackBossAttackHit && enemy.bossAttackHitPlayers?.has(player)) return false;
+    if (this.options.isGameOver()) return false;
+    if (!player.tryBeginHitWindow()) return false;
+    if (trackBossAttackHit) enemy.bossAttackHitPlayers?.add(player);
     const now = this.scene.time.now;
     if (this.options.tryBlockPlayerHit(player, enemy)) {
       const knockbackAngle = Phaser.Math.Angle.Between(
@@ -551,9 +903,15 @@ export class EnemySystem {
         Math.cos(knockbackAngle) * SHIELD_KNOCKBACK_SPEED,
         Math.sin(knockbackAngle) * SHIELD_KNOCKBACK_SPEED,
       );
-      return;
+      return true;
     }
-    const damage = Math.max(1, enemy.damage - player.stats.armor);
+    const damage = enemy.enemyType === 'boss' &&
+      damageMultiplier === BOSS_CONTACT_DAMAGE_MULTIPLIER
+      ? bossContactDamage(enemy.damage, player.stats.armor)
+      : Math.max(
+        1,
+        Math.max(1, Math.round(enemy.damage * damageMultiplier)) - player.stats.armor,
+      );
     player.stats.hp = Math.max(0, player.stats.hp - damage);
     player.showDamageFeedback();
     const angle = Phaser.Math.Angle.Between(
@@ -566,6 +924,7 @@ export class EnemySystem {
     this.showFloatingText(player.sprite.x, player.sprite.y - 20, damage, '#ffffff');
     this.audio.effects.thump.play();
     if (player.stats.hp <= 0) this.options.onPlayerDeath(player);
+    return true;
   }
 
   private onProjectileHit(projectile: DamageSprite, enemy: EnemySprite): void {
@@ -576,11 +935,63 @@ export class EnemySystem {
   }
 
   private onMeleeHit(hitbox: DamageSprite, enemy: EnemySprite): void {
-    if (!hitbox.active || !enemy.active) return;
+    if (!hitbox.active || !enemy.active || hitbox.presentationOnly) return;
     const now = this.scene.time.now;
-    if (enemy.lastDmgT && now - enemy.lastDmgT < MELEE_HIT_INTERVAL_MS) return;
+    const sourceId = hitbox.damageSourceId ?? 'shared-melee';
+    if (hitbox.hitMode === 'contact') {
+      let contactFrames = this.meleeContactFrames.get(enemy);
+      if (!contactFrames) {
+        contactFrames = new Map();
+        this.meleeContactFrames.set(enemy, contactFrames);
+      }
+      if (!consumeDamageContact(contactFrames, sourceId, this.meleeContactFrame)) return;
+      enemy.lastDmgT = now;
+      this.damageEnemy(enemy, hitbox.damage, hitbox.knockback);
+      return;
+    }
+    const hitIntervalMs = hitbox.hitIntervalMs ?? MELEE_HIT_INTERVAL_MS;
+    let sourceTimes = this.meleeHitTimes.get(enemy);
+    if (!sourceTimes) {
+      sourceTimes = new Map();
+      this.meleeHitTimes.set(enemy, sourceTimes);
+    }
+    if (!consumeDamageSourceCooldown(sourceTimes, sourceId, now, hitIntervalMs)) return;
     enemy.lastDmgT = now;
-    this.damageEnemy(enemy, hitbox.damage);
+    this.damageEnemy(enemy, hitbox.damage, hitbox.knockback);
+  }
+
+  private applyEnemyKnockback(enemy: EnemySprite, knockback: EnemyKnockback): void {
+    if (knockback.strength <= 0 || knockback.durationMs <= 0) return;
+    // Preserve an already telegraphed boss action. Bosses still receive a
+    // reduced push while chasing, whereas regular and compressed enemies take
+    // the full weapon knockback.
+    if (enemy.enemyType === 'boss' && enemy.bossAttackPhase !== 'chase') return;
+    const resistance = enemy.enemyType === 'boss' ? 0.35 : 1;
+    const strength = knockback.strength * resistance;
+    const now = this.scene.time.now;
+    if (!shouldApplyKnockback(
+      enemy.knockbackUntil ?? 0,
+      enemy.knockbackStrength ?? 0,
+      now,
+      strength,
+    )) return;
+    enemy.knockbackUntil = Math.max(
+      enemy.knockbackUntil ?? 0,
+      now + knockback.durationMs * resistance,
+    );
+    enemy.knockbackStrength = strength;
+    enemy.setVelocity(
+      knockback.directionX * strength,
+      knockback.directionY * strength,
+    );
+  }
+
+  private pruneMeleeContacts(): void {
+    this.getActiveEnemies().forEach((enemy) => {
+      const contactFrames = this.meleeContactFrames.get(enemy);
+      if (!contactFrames) return;
+      pruneDamageContacts(contactFrames, this.meleeContactFrame);
+    });
   }
 
   private onXpCollected(player: PlayerController, gem: DropSprite): void {
@@ -611,8 +1022,17 @@ export class EnemySystem {
       this.progress.normalKillCount++;
       this.trySpawnBossForKills();
     } else if (isBoss) {
-      this.advanceNormalGeneration();
-      this.options.showToast(`보스 처치! 경험치 ${xpValue} + 체력 회복 보상`);
+      const remainingBosses = this.getActiveEnemies().filter((candidate) => (
+        candidate !== enemy && candidate.enemyType === 'boss'
+      )).length;
+      if (remainingBosses === 0) {
+        this.advanceNormalGeneration();
+        this.options.showToast(`보스 무리 처치! 경험치 ${xpValue} + 체력 회복 보상`);
+      } else {
+        this.options.showToast(`보스 처치! 남은 보스 ${remainingBosses}마리`);
+      }
+      // Fire once for every boss, rather than only after the entire wave dies.
+      this.options.onBossKilled?.(enemy);
     }
 
     const showDeathEffect = this.isWithinCamera(enemy.x, enemy.y) && this.consumeDeathEffectBudget();
@@ -634,26 +1054,29 @@ export class EnemySystem {
       });
     }
 
-    // Field drops intentionally use exactly two visual/item types: XP and HP.
-    // The former bonus-star roll is folded into this one XP gem so a kill never
-    // produces a third-looking pickup.
+    // Regular enemies drop gems, while bosses use a dedicated reward bundle.
+    // The former bonus-star roll remains folded into that one XP pickup.
     const totalXpValue = xpValue + (Math.random() < 0.05 ? 5 : 0);
-    const gemSize = isBoss
-      ? 44
-      : Phaser.Math.Clamp(20 + Math.log2(totalXpValue + 1) * 2, 22, 34);
-    this.createXpDrop(enemy.x, enemy.y, totalXpValue, gemSize);
+    this.createXpDrop(
+      enemy.x,
+      enemy.y,
+      totalXpValue,
+      isBoss ? 'boss' : 'regular',
+    );
 
     if (
       (isBoss || Math.random() < 0.08) &&
       this.healthOrbs.countActive() < MAX_ACTIVE_HEALTH_DROPS
     ) {
-      this.healthOrbs.create(enemy.x + Phaser.Math.Between(-10, 10), enemy.y, 'healthOrb')
+      this.healthOrbs.create(enemy.x + Phaser.Math.Between(-10, 10), enemy.y, 'healthPotion')
         .setDepth(2)
-        .setDisplaySize(30, 30);
+        .setDisplaySize(HEALTH_DROP_WIDTH, HEALTH_DROP_HEIGHT);
     }
 
     enemy.healthBar?.destroy();
     enemy.healthBar = null;
+    enemy.spawnPresentation?.destroy();
+    enemy.spawnPresentation = null;
     enemy.presentation?.destroy(true);
     enemy.presentation = null;
     if (showDeathEffect) {
@@ -670,15 +1093,72 @@ export class EnemySystem {
     enemy.destroy();
   }
 
+  private beginMonsterPortalEntry(enemy: EnemySprite): void {
+    enemy.portalSpawnEndsAt = this.scene.time.now + MONSTER_PORTAL_DURATION_MS;
+    enemy.portalSpawnNetworkEndsAt = Date.now() + MONSTER_PORTAL_DURATION_MS;
+    enemy.setVelocity(0, 0).setVisible(false);
+    const body = enemy.body as Phaser.Physics.Arcade.Body;
+    body.enable = false;
+    if (this.isWithinCamera(enemy.x, enemy.y)) {
+      enemy.spawnPresentation = MonsterPortalPresentation.create(
+        this.scene,
+        enemy.x,
+        enemy.y,
+        {
+          texture: 'monsterSheet',
+          frame: enemy.monsterFrames.idle,
+          scale: Math.abs(enemy.scaleX),
+          tint: enemy.baseTint,
+        },
+        MONSTER_PORTAL_DURATION_MS,
+      );
+    }
+    this.scene.time.delayedCall(MONSTER_PORTAL_DURATION_MS, () => {
+      if (!enemy.active) return;
+      const activeBody = enemy.body as Phaser.Physics.Arcade.Body | null;
+      if (activeBody) activeBody.enable = true;
+      enemy.portalSpawnEndsAt = undefined;
+      enemy.portalSpawnNetworkEndsAt = undefined;
+      enemy.spawnPresentation?.destroy();
+      enemy.spawnPresentation = null;
+      enemy.setVisible(true);
+    });
+  }
+
   private createHealthBar(enemy: EnemySprite): void {
-    if (!this.isWithinCamera(enemy.x, enemy.y)) {
+    if (enemy.enemyType !== 'boss') {
+      enemy.healthBar?.destroy();
       enemy.healthBar = null;
+      return;
+    }
+    if (isBossEntering(enemy.bossSpawnEndsAt, this.scene.time.now)) {
+      enemy.healthBar?.destroy();
+      enemy.healthBar = null;
+      return;
+    }
+    if (!this.isWithinCamera(enemy.x, enemy.y)) {
+      enemy.healthBar?.destroy();
+      enemy.healthBar = null;
+      return;
+    }
+    if (enemy.healthBar) {
+      enemy.healthBar.update();
       return;
     }
     enemy.healthBar = new EnemyHealthBar(this.scene, enemy);
   }
 
   private syncHealthBar(enemy: EnemySprite): void {
+    if (enemy.enemyType !== 'boss') {
+      enemy.healthBar?.destroy();
+      enemy.healthBar = null;
+      return;
+    }
+    if (isBossEntering(enemy.bossSpawnEndsAt, this.scene.time.now)) {
+      enemy.healthBar?.destroy();
+      enemy.healthBar = null;
+      return;
+    }
     if (this.isWithinCamera(enemy.x, enemy.y)) {
       if (!enemy.healthBar) this.createHealthBar(enemy);
       enemy.healthBar?.update();
@@ -732,23 +1212,54 @@ export class EnemySystem {
     });
   }
 
-  private createXpDrop(x: number, y: number, value: number, size: number): void {
+  private createXpDrop(
+    x: number,
+    y: number,
+    value: number,
+    kind: XpDropKind,
+  ): void {
+    let dropValue = value;
     if (this.xpGems.countActive() >= MAX_ACTIVE_XP_DROPS) {
-      const existing = (this.xpGems.getChildren() as DropSprite[]).find((gem) => gem.active);
+      const activeDrops = (this.xpGems.getChildren() as DropSprite[]).filter((gem) => gem.active);
+      const existing = activeDrops.find((gem) => gem.xpDropKind !== 'boss') ?? activeDrops[0];
       if (existing) {
-        existing.xpValue = (existing.xpValue ?? 1) + value;
-        const mergedSize = Phaser.Math.Clamp(
-          20 + Math.log2((existing.xpValue ?? 1) + 1) * 2,
-          22,
-          44,
-        );
-        existing.setDisplaySize(mergedSize, mergedSize);
-        return;
+        if (kind === 'boss') {
+          dropValue += existing.xpValue ?? 1;
+          existing.destroy();
+        } else {
+          existing.xpValue = (existing.xpValue ?? 1) + value;
+          if (existing.xpDropKind !== 'boss') {
+            const mergedSize = regularXpDropSize(existing.xpValue, 44);
+            existing.setDisplaySize(mergedSize, mergedSize);
+          }
+          return;
+        }
       }
     }
-    const gem = this.xpGems.create(x, y, 'xpGem') as DropSprite;
-    gem.setDepth(2).setDisplaySize(size, size);
-    gem.xpValue = value;
+
+    const gem = this.xpGems.create(
+      x,
+      y,
+      kind === 'boss' ? BOSS_XP_REWARD_TEXTURE_KEY : 'xpGem',
+    ) as DropSprite;
+    gem.setDepth(2);
+    gem.xpDropKind = kind;
+    gem.xpValue = dropValue;
+    if (kind === 'regular') {
+      const size = regularXpDropSize(dropValue);
+      gem.setDisplaySize(size, size);
+      return;
+    }
+
+    gem.setDisplaySize(BOSS_XP_REWARD_DISPLAY_WIDTH, BOSS_XP_REWARD_DISPLAY_HEIGHT);
+    const body = gem.body as Phaser.Physics.Arcade.Body;
+    const sourceBodyWidth = BOSS_XP_REWARD_PICKUP_SIZE / Math.max(0.001, Math.abs(gem.scaleX));
+    const sourceBodyHeight = BOSS_XP_REWARD_PICKUP_SIZE / Math.max(0.001, Math.abs(gem.scaleY));
+    body.setSize(sourceBodyWidth, sourceBodyHeight);
+    body.setOffset(
+      (gem.width - sourceBodyWidth) / 2,
+      (gem.height - sourceBodyHeight) / 2,
+    );
   }
 
   private isWithinCamera(x: number, y: number): boolean {
@@ -785,19 +1296,26 @@ export class EnemySystem {
     return this.getActiveEnemies().filter((enemy) => REGULAR_ENEMY_TYPES.has(enemy.enemyType)).length;
   }
 
-  private rescaleRegularEnemyHp(scaleRatio: number): void {
-    this.rescaleEnemyHp(scaleRatio, true);
+  private rescaleNonBossEnemyHp(scaleRatio: number): void {
+    this.getActiveEnemies().forEach((enemy) => {
+      if (enemy.enemyType === 'boss') return;
+      this.rescaleOneEnemyHp(enemy, scaleRatio);
+    });
   }
 
   private rescaleEnemyHp(scaleRatio: number, regularOnly: boolean): void {
     this.getActiveEnemies().forEach((enemy) => {
       if (regularOnly && !REGULAR_ENEMY_TYPES.has(enemy.enemyType)) return;
-      const hpRatio = Phaser.Math.Clamp(enemy.hp / Math.max(1, enemy.maxHp), 0, 1);
-      enemy.maxHp = Math.max(1, Math.floor(enemy.maxHp * scaleRatio));
-      enemy.hp = Math.max(1, Math.ceil(enemy.maxHp * hpRatio));
-      enemy.healthBar?.destroy();
-      this.createHealthBar(enemy);
+      this.rescaleOneEnemyHp(enemy, scaleRatio);
     });
+  }
+
+  private rescaleOneEnemyHp(enemy: EnemySprite, scaleRatio: number): void {
+    const health = scaleHealthPreservingRatio(enemy.hp, enemy.maxHp, scaleRatio);
+    enemy.maxHp = health.maxHp;
+    enemy.hp = health.hp;
+    enemy.healthBar?.destroy();
+    this.createHealthBar(enemy);
   }
 
   private players(): PlayerController[] {

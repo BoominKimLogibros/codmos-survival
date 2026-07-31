@@ -1,5 +1,7 @@
 import { PLAYER_HIT_FEEDBACK_DURATION_MS, PLAYER_SCALE } from '../config/constants';
 import { UI_COLORS } from '../ui/theme';
+import { playerGhostAnimation, type PlayerGhostReason } from './playerGhost';
+import { BOSS_SUCCESS_RADIUS } from './playerSuccess';
 import { createInitialPlayerStats, type PlayerDirection, type PlayerStats } from './types';
 
 export interface PlayerControllerOptions {
@@ -125,6 +127,12 @@ export class PlayerController {
   private hitWindowActive = false;
   private hitRevisionValue = 0;
   private removeSpineFlipWorkaround?: () => void;
+  private recoveryTimer?: Phaser.Time.TimerEvent;
+  private bossSuccessActive = false;
+  private bossSuccessRevisionValue = 0;
+  private bossSuccessEffect?: Phaser.GameObjects.Arc;
+  private bossSuccessCancelled?: () => void;
+  private destroyed = false;
 
   constructor(scene: Phaser.Scene, options: PlayerControllerOptions) {
     this.scene = scene;
@@ -150,11 +158,8 @@ export class PlayerController {
       const cameraLerp = Phaser.Math.Clamp(options.cameraLerp ?? 0.08, 0, 1);
       scene.cameras.main.startFollow(this.sprite, true, cameraLerp, cameraLerp);
     }
-    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.removeSpineFlipWorkaround?.();
-      this.removeSpineFlipWorkaround = undefined;
-    });
-    scene.time.addEvent({
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
+    this.recoveryTimer = scene.time.addEvent({
       delay: 1000,
       loop: true,
       callback: () => {
@@ -175,6 +180,14 @@ export class PlayerController {
 
   get hitRevision(): number {
     return this.hitRevisionValue;
+  }
+
+  get isBossSuccessActive(): boolean {
+    return this.bossSuccessActive;
+  }
+
+  get bossSuccessRevision(): number {
+    return this.bossSuccessRevisionValue;
   }
 
   tryBeginHitWindow(): boolean {
@@ -207,6 +220,17 @@ export class PlayerController {
       velocityY *= 0.707;
     }
 
+    if (this.bossSuccessActive) {
+      if (velocityX !== 0 || velocityY !== 0) {
+        // Resume combat before the scene updates weapons in this same frame.
+        this.exitBossSuccessState();
+      } else {
+        this.sprite.setVelocity(0, 0);
+        this.syncSpinePosition();
+        return;
+      }
+    }
+
     this.sprite.setVelocity(velocityX * speed, velocityY * speed);
     this.updatePresentation(velocityX, velocityY);
     this.syncSpinePosition();
@@ -225,6 +249,11 @@ export class PlayerController {
   }
 
   applyNetworkState(x: number, y: number, velocityX: number, velocityY: number): void {
+    if (this.bossSuccessActive) {
+      this.sprite.setPosition(x, y).setVelocity(0, 0);
+      this.syncSpinePosition();
+      return;
+    }
     this.sprite.setPosition(x, y).setVelocity(velocityX, velocityY);
     const magnitude = Math.hypot(velocityX, velocityY);
     const normalizedX = magnitude > 0 ? velocityX / magnitude : 0;
@@ -252,20 +281,93 @@ export class PlayerController {
     });
   }
 
-  enterDefeatedState(): void {
+  enterBossSuccessState(onCancelled?: () => void): void {
+    if (this.defeated || this.stats.hp <= 0 || !this.sprite.active || this.destroyed) return;
+    this.bossSuccessActive = true;
+    this.bossSuccessRevisionValue++;
+    this.bossSuccessCancelled = onCancelled;
+    this.sprite.setVelocity(0, 0);
+
+    if (!this.bossSuccessEffect) {
+      this.bossSuccessEffect = this.scene.add.circle(
+        this.sprite.x,
+        this.sprite.y,
+        BOSS_SUCCESS_RADIUS,
+        0xffd54f,
+        0.08,
+      ).setStrokeStyle(3, 0xfff176, 0.82).setDepth(4.6).setAlpha(0.66);
+      this.scene.tweens.add({
+        targets: this.bossSuccessEffect,
+        alpha: 1,
+        duration: 520,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
+
+    if (this.playerHasSpine) {
+      Object.values(this.spineViews).forEach((view) => view.setVisible(false));
+      const successView = this.spineViews.front;
+      successView.setVisible(true).setDepth(5).setColor(0xffffff).setAlpha(1);
+      try {
+        successView.play('success', true);
+        successView._currentAnim = 'success';
+      } catch {
+        try {
+          successView.play('idle', true);
+          successView._currentAnim = 'idle';
+        } catch {
+          // The setup pose remains visible if a custom skin has no success animation.
+        }
+      }
+    }
+    this.syncSpinePosition();
+  }
+
+  exitBossSuccessState(notify = true): void {
+    if (!this.bossSuccessActive && !this.bossSuccessEffect) return;
+    this.bossSuccessActive = false;
+    const cancelled = this.bossSuccessCancelled;
+    this.bossSuccessCancelled = undefined;
+    if (this.bossSuccessEffect) {
+      this.scene.tweens.killTweensOf(this.bossSuccessEffect);
+      this.bossSuccessEffect.destroy();
+      this.bossSuccessEffect = undefined;
+    }
+
+    if (this.playerHasSpine && !this.defeated && !this.destroyed) {
+      Object.values(this.spineViews).forEach((view) => view.setVisible(false));
+      this.currentSpineView = this.spineViews[this.currentDirection];
+      this.currentSpineView.setVisible(true).setDepth(5).setColor(0xffffff).setAlpha(1);
+      try {
+        this.currentSpineView.play('idle', true);
+        this.currentSpineView._currentAnim = 'idle';
+      } catch {
+        // The setup pose remains visible if a custom skin has no idle animation.
+      }
+    }
+    if (notify) cancelled?.();
+  }
+
+  enterDefeatedState(reason: PlayerGhostReason = 'death'): void {
     if (this.defeated) return;
+    this.exitBossSuccessState(false);
     this.defeated = true;
     const { x, y } = this.sprite;
     this.sprite.setVelocity(0, 0);
     this.sprite.disableBody(true, true);
     Object.values(this.spineViews).forEach((view) => view.setVisible(false));
+    const isDeath = reason === 'death';
 
     if (!this.playerHasSpine) {
-      const fallbackGhost = this.scene.add.image(x, y - 44, 'player')
+      const fallbackGhost = this.scene.add.image(x, isDeath ? y : y - 44, 'player')
         .setCrop(0, 0, 32, 17)
-        .setTint(UI_COLORS.grayLight)
-        .setAlpha(0)
+        .setTint(isDeath ? 0xffffff : UI_COLORS.grayLight)
+        .setAlpha(isDeath ? 1 : 0)
         .setDepth(19);
+      this.defeatedFallback = fallbackGhost;
+      if (isDeath) return;
       const fallbackGlow = this.scene.add.ellipse(
         x,
         y - 52,
@@ -274,26 +376,33 @@ export class PlayerController {
         UI_COLORS.primary,
         0.12,
       ).setDepth(18).setAlpha(0);
-      this.defeatedFallback = fallbackGhost;
       this.defeatedGlow = fallbackGlow;
       this.fadeInGhost(fallbackGhost, fallbackGlow);
       return;
     }
 
     const ghost = this.spineViews.front;
-    const ghostY = y - 45;
+    const ghostY = isDeath ? y : y - 45;
     ghost
       .setPosition(x, ghostY)
       .setDepth(19)
-      .setColor(UI_COLORS.grayLight)
-      .setAlpha(0)
+      .setColor(isDeath ? 0xffffff : UI_COLORS.grayLight)
+      .setAlpha(isDeath ? 1 : 0)
       .setVisible(true);
+    const defeatedAnimation = playerGhostAnimation(reason);
     try {
-      ghost.play('idle', true);
-      ghost._currentAnim = 'idle';
+      ghost.play(defeatedAnimation.name, defeatedAnimation.loop);
+      ghost._currentAnim = defeatedAnimation.name;
     } catch {
-      // The setup pose remains visible if a skin has no idle animation.
+      try {
+        ghost.play('idle', true);
+        ghost._currentAnim = 'idle';
+      } catch {
+        // The setup pose remains visible if a skin has no compatible animation.
+      }
     }
+
+    if (isDeath) return;
 
     const glow = this.scene.add.ellipse(
       x,
@@ -308,6 +417,7 @@ export class PlayerController {
   }
 
   reviveAt(x: number, y: number, hp = Math.ceil(this.stats.maxHp * 0.5)): void {
+    this.exitBossSuccessState(false);
     this.defeated = false;
     this.hitWindowActive = false;
     this.stats.hp = Phaser.Math.Clamp(Math.ceil(hp), 1, this.stats.maxHp);
@@ -344,6 +454,32 @@ export class PlayerController {
       }
     }
     this.syncSpinePosition();
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.exitBossSuccessState(false);
+    this.destroyed = true;
+    this.recoveryTimer?.remove(false);
+    this.recoveryTimer = undefined;
+    this.removeSpineFlipWorkaround?.();
+    this.removeSpineFlipWorkaround = undefined;
+    this.scene.tweens.killTweensOf(this.sprite);
+    this.sprite.destroy();
+    Object.values(this.spineViews).forEach((view) => {
+      this.scene.tweens.killTweensOf(view);
+      view?.destroy();
+    });
+    if (this.defeatedFallback) {
+      this.scene.tweens.killTweensOf(this.defeatedFallback);
+      this.defeatedFallback.destroy();
+      this.defeatedFallback = undefined;
+    }
+    if (this.defeatedGlow) {
+      this.scene.tweens.killTweensOf(this.defeatedGlow);
+      this.defeatedGlow.destroy();
+      this.defeatedGlow = undefined;
+    }
   }
 
   private fadeInGhost(
@@ -412,6 +548,7 @@ export class PlayerController {
   }
 
   private updatePresentation(velocityX: number, velocityY: number): void {
+    if (this.bossSuccessActive) return;
     if (!this.playerHasSpine) {
       if (velocityX < 0) {
         this.sprite.setFlipX(true);
@@ -467,9 +604,11 @@ export class PlayerController {
   }
 
   private syncSpinePosition(): void {
-    if (!this.playerHasSpine) return;
-    Object.values(this.spineViews).forEach((spine) => {
-      spine.setPosition(this.sprite.x, this.sprite.y);
-    });
+    if (this.playerHasSpine) {
+      Object.values(this.spineViews).forEach((spine) => {
+        spine.setPosition(this.sprite.x, this.sprite.y);
+      });
+    }
+    this.bossSuccessEffect?.setPosition(this.sprite.x, this.sprite.y);
   }
 }

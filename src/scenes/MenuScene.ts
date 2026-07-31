@@ -1,9 +1,25 @@
 import { getSkinOption, SKIN_OPTIONS } from '../config/skins';
-import type { Profile, WeaponDefinition, WeaponKey, WeaponRuntimeStats } from '../game/types';
+import { MAX_WEAPON_LEVEL } from '../config/constants';
+import type {
+  PlayerStats,
+  Profile,
+  WeaponDefinition,
+  WeaponKey,
+  WeaponRuntimeStats,
+} from '../game/types';
 import {
   calculateWeaponRuntimeStats,
   createWeaponDefinitions,
 } from '../game/WeaponSystem';
+import {
+  calculateEffectiveUnlockLevel,
+  calculateEnhancementLevel,
+  calculatePlayerStatLevel,
+  getSkillTradePenaltyCandidates,
+  PLAYER_STAT_LABELS,
+  type PenalizedPlayerStat,
+} from '../game/progression';
+import { PLAYER_STAT_ICONS, PLAYER_STAT_KEYS } from '../config/statIcons';
 import {
   changeProfileSkin,
   downloadProfile,
@@ -14,6 +30,7 @@ import {
   renameProfile,
   resetProfile,
   selectProfile,
+  tradeProfileSkill,
 } from '../services/profileService';
 import {
   createUiButton,
@@ -58,6 +75,16 @@ function formatSkillStats(
   }
 }
 
+function formatProfileStatValue(stats: PlayerStats, stat: PenalizedPlayerStat): string {
+  switch (stat) {
+    case 'maxHp': return `${Math.ceil(stats.hp)}/${stats.maxHp}`;
+    case 'armor': return `${stats.armor}`;
+    case 'speed': return `${stats.speed}`;
+    case 'magnet': return `${stats.magnet}px`;
+    case 'recovery': return `${stats.recovery.toFixed(1)}/초`;
+  }
+}
+
 export class MenuScene extends Phaser.Scene {
   private page = 0;
   private skinPage = 0;
@@ -86,9 +113,11 @@ export class MenuScene extends Phaser.Scene {
   private skinOptionsLayer: Phaser.GameObjects.Container | null = null;
   private resetModalRoot: Phaser.GameObjects.Container | null = null;
   private skillModalRoot: Phaser.GameObjects.Container | null = null;
+  private skillTradeModalRoot: Phaser.GameObjects.Container | null = null;
   private readonly startFromKeyboard = (): void => this._startSelectedProfile();
   private readonly closeActiveModal = (): void => {
     if (this.renameDialog) this._closeRenameDialog();
+    else if (this.skillTradeModalRoot) this._closeSkillTradeModal();
     else if (this.resetModalRoot) this._closeResetModal();
     else if (this.skillModalRoot) this._closeSkillModal();
     else this._closeSkinModal();
@@ -177,7 +206,7 @@ export class MenuScene extends Phaser.Scene {
 
     this.menuToast = createUiToast(this, width / 2, height - 145, {
       width: Math.min(430, width - 32),
-    }).setDepth(3000);
+    }).setDepth(7000);
 
     const saveFileInputElement = document.getElementById('save-file-input');
     if (!(saveFileInputElement instanceof HTMLInputElement)) {
@@ -623,9 +652,35 @@ export class MenuScene extends Phaser.Scene {
     const hint = this.add.text(
       0,
       -panelHeight / 2 + 59,
-      `습득한 스킬 ${learnedCount}/5 · 저장된 현재 레벨 기준`,
+      `습득한 스킬 ${learnedCount}/5 · 스킬 +1은 다른 스킬/강화 스탯 1단계 필요`,
       uiTextStyle({ fontSize: '11px', color: '#a7acb7', fontStyle: '600' }),
     ).setOrigin(0.5);
+    const stats = profile.state.stats;
+    const statSummaryItems: Phaser.GameObjects.GameObject[] = [];
+    const statRowWidth = panelWidth - 40;
+    const statCellWidth = statRowWidth / PLAYER_STAT_KEYS.length;
+    const statIconSize = compact ? 22 : 26;
+    const statIconY = -panelHeight / 2 + 84;
+    PLAYER_STAT_KEYS.forEach((stat, index) => {
+      const x = -statRowWidth / 2 + statCellWidth * (index + 0.5);
+      const icon = this.add.image(x, statIconY, PLAYER_STAT_ICONS[stat])
+        .setDisplaySize(statIconSize, statIconSize);
+      const summary = this.add.text(
+        x,
+        statIconY + statIconSize / 2 + 3,
+        `${PLAYER_STAT_LABELS[stat]} Lv.${calculatePlayerStatLevel(stats, stat)}\n` +
+          formatProfileStatValue(stats, stat),
+        uiTextStyle({
+          fontSize: compact ? '7px' : '8px',
+          color: '#d4d7de',
+          fontStyle: '700',
+          align: 'center',
+          lineSpacing: 1,
+          wordWrap: { width: statCellWidth - 3, useAdvancedWrap: true },
+        }),
+      ).setOrigin(0.5, 0);
+      statSummaryItems.push(icon, summary);
+    });
     const close = createUiButton(this, panelWidth / 2 - 30, -panelHeight / 2 + 30, '×', {
       width: 40,
       height: 40,
@@ -640,7 +695,7 @@ export class MenuScene extends Phaser.Scene {
     const rows = Math.ceil(keys.length / columns);
     const columnGap = 12;
     const sidePadding = 20;
-    const contentTop = -panelHeight / 2 + 82;
+    const contentTop = -panelHeight / 2 + 136;
     const contentBottom = panelHeight / 2 - 15;
     const gridHeight = contentBottom - contentTop;
     const cellWidth = (panelWidth - sidePadding * 2 - columnGap * (columns - 1)) / columns;
@@ -668,7 +723,8 @@ export class MenuScene extends Phaser.Scene {
         .setDisplaySize(iconSize, iconSize)
         .setAlpha(learned ? 1 : 0.25);
       const textX = iconX + iconSize / 2 + 11;
-      const textWidth = cardWidth - (textX - (x - cardWidth / 2)) - 12;
+      const tradeWidth = learned ? 67 : 0;
+      const textWidth = cardWidth - (textX - (x - cardWidth / 2)) - 12 - tradeWidth;
       const name = this.add.text(textX, y - cardHeight / 2 + 14, definition.name, uiTextStyle({
         fontSize: cardHeight < 70 ? '11px' : '14px',
         color: learned ? '#ffffff' : '#6f7480',
@@ -677,7 +733,7 @@ export class MenuScene extends Phaser.Scene {
       const level = this.add.text(
         x + cardWidth / 2 - 11,
         y - cardHeight / 2 + 14,
-        learned ? `Lv.${definition.level}/${definition.maxLevel ?? '∞'}` : '미습득',
+        learned ? `Lv.${definition.level}/${definition.maxLevel ?? '∞'}` : 'Lv.0 · 미습득',
         uiTextStyle({
           fontSize: '10px',
           color: learned ? '#d4d7de' : '#6f7480',
@@ -708,17 +764,134 @@ export class MenuScene extends Phaser.Scene {
           wordWrap: { width: textWidth, useAdvancedWrap: true },
         }),
       ).setOrigin(0, 0.5).setMaxLines(2);
-      root.add([card, icon, name, level, description, stats]);
+      const cardItems: Phaser.GameObjects.GameObject[] = [card, icon, name, level, description, stats];
+      if (learned) {
+        const atCap = definition.level >= MAX_WEAPON_LEVEL;
+        const hasPenaltyCandidate = getSkillTradePenaltyCandidates(profile.state, key).length > 0;
+        const trade = createUiButton(
+          this,
+          x + cardWidth / 2 - 40,
+          y + cardHeight / 2 - 20,
+          '스킬 +1',
+          {
+            width: 67,
+            height: 28,
+            fill: UI_COLORS.panelDark,
+            border: UI_COLORS.primary,
+            fontSize: '9px',
+            radius: 8,
+          },
+        );
+        trade.setEnabled(profile.state.stats.level > 1 && !atCap && hasPenaltyCandidate);
+        trade.on('pointerdown', () => this._openSkillTradeModal(profileId, key));
+        cardItems.push(trade);
+      }
+      root.add(cardItems);
     });
 
     overlay.on('pointerdown', () => this._closeSkillModal());
-    root.addAt([overlay, panel, title, hint, close], 0);
+    root.addAt([overlay, panel, title, hint, ...statSummaryItems, close], 0);
     this.skillModalRoot = root;
   }
 
   private _closeSkillModal(): void {
+    this._closeSkillTradeModal();
     this.skillModalRoot?.destroy(true);
     this.skillModalRoot = null;
+  }
+
+  private _openSkillTradeModal(profileId: string, key: WeaponKey): void {
+    const profile = getProfile(profileId);
+    if (!profile || profile.state.stats.level <= 1) return;
+    const definitions = createWeaponDefinitions();
+    const selected = definitions[key];
+    selected.level = profile.state.weaponLevels[key];
+    if (selected.level >= MAX_WEAPON_LEVEL) return;
+    this._closeSkillTradeModal();
+
+    const candidates = getSkillTradePenaltyCandidates(profile.state, key);
+    if (candidates.length === 0) {
+      this._showToast('감소시킬 다른 스킬 또는 강화 스탯이 없어 도전할 수 없습니다.', true);
+      return;
+    }
+    const candidateLabels = candidates.map((candidate) => (
+      candidate.type === 'skill'
+        ? `${definitions[candidate.key].name} Lv.${candidate.level}→Lv.${candidate.level - 1}`
+        : `${PLAYER_STAT_LABELS[candidate.key]} Lv.${candidate.level}→Lv.${candidate.level - 1}`
+    ));
+    const chance = Math.min(100, profile.state.stats.level);
+    const { width, height } = this.scale.gameSize;
+    const panelWidth = Math.min(440, width - 24);
+    const root = this.add.container(width / 2, height / 2).setDepth(6200);
+    const overlay = this.add.rectangle(0, 0, width, height, UI_COLORS.shadow, 0.82)
+      .setInteractive();
+    const panel = createUiPanel(this, 0, 0, panelWidth, 284, {
+      fill: UI_COLORS.panelDark,
+      border: UI_COLORS.primary,
+      borderWidth: 2,
+      radius: 18,
+      shadow: true,
+    });
+    const title = this.add.text(0, -104, `${selected.name} 스킬 +1`, uiTextStyle({
+      fontSize: '20px', fontStyle: '800',
+    })).setOrigin(0.5);
+    const probability = this.add.text(0, -66, `현재 성공 확률 ${chance}%`, uiTextStyle({
+      fontSize: '15px', color: '#ffffff', fontStyle: '800',
+    })).setOrigin(0.5);
+    const guide = this.add.text(
+      0,
+      -12,
+      `성공·실패와 관계없이 프로필 Lv.${profile.state.stats.level} → Lv.${profile.state.stats.level - 1}\n`
+        + `성공 시 ${selected.name} Lv.${selected.level} → Lv.${selected.level + 1}`,
+      uiTextStyle({
+        fontSize: '11px', color: '#d4d7de', fontStyle: '600', align: 'center', lineSpacing: 6,
+      }),
+    ).setOrigin(0.5);
+    const penalty = this.add.text(
+      0,
+      41,
+      `랜덤 감소 후보: ${candidateLabels.join(', ')} 중 1개`,
+      uiTextStyle({
+        fontSize: '10px', color: '#a7acb7', fontStyle: '600',
+        wordWrap: { width: panelWidth - 42, useAdvancedWrap: true }, align: 'center',
+      }),
+    ).setOrigin(0.5);
+    const cancel = createUiButton(this, -78, 99, '취소', {
+      width: 136, fill: UI_COLORS.surfaceRaised, border: UI_COLORS.border,
+    });
+    const confirm = createUiButton(this, 78, 99, `${chance}% 도전`, {
+      width: 136, fill: UI_COLORS.primary, border: UI_COLORS.primary,
+    });
+    overlay.on('pointerdown', () => this._closeSkillTradeModal());
+    cancel.on('pointerdown', () => this._closeSkillTradeModal());
+    confirm.on('pointerdown', () => {
+      const result = tradeProfileSkill(profileId, key);
+      if (!result?.attempted) {
+        this._closeSkillTradeModal();
+        this._showToast('스킬 교환 조건을 충족하지 못했습니다.', true);
+        return;
+      }
+      const penaltyName = result.penaltySkill
+        ? createWeaponDefinitions()[result.penaltySkill].name
+        : result.penaltyStat
+          ? PLAYER_STAT_LABELS[result.penaltyStat]
+          : null;
+      this._closeSkillModal();
+      this._refreshProfiles();
+      this._showToast(
+        `${selected.name} +1 ${result.success ? '성공' : '실패'} · 프로필 Lv.${result.levelAfter}`
+          + (penaltyName ? ` · ${penaltyName} Lv.${result.penaltyLevelAfter}` : ''),
+        !result.success,
+      );
+      this._openSkillModal(profileId);
+    });
+    root.add([overlay, panel, title, probability, guide, penalty, cancel, confirm]);
+    this.skillTradeModalRoot = root;
+  }
+
+  private _closeSkillTradeModal(): void {
+    this.skillTradeModalRoot?.destroy(true);
+    this.skillTradeModalRoot = null;
   }
 
   private async _downloadProfile(profileId: string): Promise<void> {
@@ -774,10 +947,12 @@ export class MenuScene extends Phaser.Scene {
     const title = this.add.text(0, -panelHeight / 2 + 31, `${profile.name} · 스킨 선택`, uiTextStyle({
       fontSize: '20px', fontStyle: '800',
     })).setOrigin(0.5);
+    const enhancementLevel = calculateEnhancementLevel(profile.state);
+    const unlockLevel = calculateEffectiveUnlockLevel(profile.state);
     const hint = this.add.text(
       0,
       -panelHeight / 2 + 58,
-      `현재 Lv.${profile.state.stats.level} · 스킨 번호와 같은 레벨에서 해금`,
+      `프로필 Lv.${profile.state.stats.level} + 강화 ${enhancementLevel} = 해금 Lv.${unlockLevel}`,
       uiTextStyle({ fontSize: '11px', color: '#a7acb7', fontStyle: '600' }),
     ).setOrigin(0.5);
     const close = createUiButton(this, panelWidth / 2 - 31, -panelHeight / 2 + 31, '×', {
@@ -807,7 +982,7 @@ export class MenuScene extends Phaser.Scene {
     const cellHeight = (panelHeight - 145) / rows;
     const profile = getProfile(profileId);
     if (!profile) return;
-    const profileLevel = profile.state.stats.level;
+    const profileLevel = calculateEffectiveUnlockLevel(profile.state);
 
     choices.forEach((choice, index) => {
       const column = index % columns;
@@ -859,7 +1034,7 @@ export class MenuScene extends Phaser.Scene {
       if (unlocked) hitTarget.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
         const updatedProfile = changeProfileSkin(profileId, choice.name);
         if (!updatedProfile) {
-          this._showToast(`Lv.${choice.requiredLevel}부터 선택할 수 있습니다.`, true);
+          this._showToast(`합산 해금 Lv.${choice.requiredLevel}부터 선택할 수 있습니다.`, true);
           return;
         }
         this._closeSkinModal();

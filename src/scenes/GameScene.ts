@@ -1,5 +1,6 @@
 import { PLAYER_SKIN, RETRY_BOSS_DELAY_MS } from '../config/constants';
 import { AudioManager } from '../game/AudioManager';
+import { BossSuccessCoordinator } from '../game/BossSuccessCoordinator';
 import { DeathCameraController } from '../game/DeathCameraController';
 import { EnemySystem } from '../game/EnemySystem';
 import { GameHud } from '../game/GameHud';
@@ -20,7 +21,12 @@ import { getProfile, updateProfileState } from '../services/profileService';
 import { stableStringify } from '../services/saveService';
 import { GameOverModal } from '../ui/GameOverModal';
 import { applyLevelUpChoice } from '../game/levelUp';
-import { advanceOneLevelIfReady } from '../game/progression';
+import { NetworkInputSource } from '../network/NetworkInputSource';
+import {
+  advanceOneLevelIfReady,
+  applyDeathPenalty,
+  PLAYER_STAT_LABELS,
+} from '../game/progression';
 
 /**
  * Coordinates the gameplay systems. Object behavior lives in the dedicated
@@ -51,6 +57,8 @@ export class GameScene extends Phaser.Scene {
   private deathCamera!: DeathCameraController;
   private deathMarker?: DeathMarker;
   private gameOverModal?: GameOverModal;
+  private inputSource!: NetworkInputSource;
+  private bossSuccess?: BossSuccessCoordinator;
   private readonly toggleExitModal = (): void => this.hud?.toggleExitModal();
 
   constructor() {
@@ -68,10 +76,12 @@ export class GameScene extends Phaser.Scene {
     this.resetRuntimeState();
     this.worldMap = new WorldMap(this);
     this.deathCamera = new DeathCameraController(this);
+    this.inputSource = new NetworkInputSource(this);
     this.player = new PlayerController(this, {
       skin: this.profileSkin,
       spawn: this.worldMap.playerSpawn,
       isRunActive: () => !this.isPaused && !this.gameOver,
+      inputProvider: () => this.inputSource.read(!this.isPaused && !this.gameOver),
     });
     this.audio = new AudioManager(this);
     this.enemySystem = new EnemySystem(
@@ -85,13 +95,28 @@ export class GameScene extends Phaser.Scene {
         onPlayerDeath: () => this.finishGame(),
         isGameOver: () => this.gameOver,
         tryBlockPlayerHit: () => this.runeSystem?.tryBlockPlayerHit() ?? false,
+        getDifficultyGrowthProfiles: () => [{
+          level: this.player.stats.level,
+          enhancementLevel: this.player.stats.weapons.reduce((sum, key) => (
+            sum + Math.max(0, (this.weapons?.definitions[key]?.level ?? 1) - 1)
+          ), 0),
+        }],
+        onBossKilled: () => this.bossSuccess?.celebrate(),
       },
     );
     this.weapons = new WeaponSystem(this, this.player, {
       getEnemies: () => this.enemySystem.getActiveEnemies(),
-      damageEnemy: (enemy, damage) => this.enemySystem.damageEnemy(enemy, damage),
+      damageEnemy: (enemy, damage, knockback) => (
+        this.enemySystem.damageEnemy(enemy, damage, knockback)
+      ),
       effects: this.audio.effects,
     });
+    this.bossSuccess = new BossSuccessCoordinator(
+      this,
+      () => [{ player: this.player, weapons: this.weapons }],
+      () => this.enemySystem.getActiveEnemies(),
+      (enemy, damage) => this.enemySystem.damageEnemy(enemy, damage),
+    );
     this.runeSystem = new RuneSystem(
       this,
       this.player,
@@ -152,12 +177,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    this.inputSource.update(!this.isPaused && !this.gameOver);
     if (this.gameOver) {
       this.deathCamera.update(delta);
       return;
     }
     if (this.isPaused) return;
     this.player.update();
+    this.bossSuccess?.update(delta);
     this.weapons.update(delta);
     this.enemySystem.update(delta);
     this.runeSystem.update(delta);
@@ -203,6 +230,7 @@ export class GameScene extends Phaser.Scene {
     this.levelUpCheckScheduled = false;
     this.lastAutoSaveAt = 0;
     this.lastAutoSaveSnapshot = '';
+    this.bossSuccess = undefined;
   }
 
   private pauseForExit(): void {
@@ -303,11 +331,15 @@ export class GameScene extends Phaser.Scene {
     this.levelUpActive = false;
     if (this.scene.isActive('LevelUpScene')) this.scene.stop('LevelUpScene');
     this.enemySystem.reduceDifficultyAfterDeath();
+    const penalty = applyDeathPenalty(this.player.stats);
+    const penaltyText = `사망 페널티 · Lv ${penalty.levelBefore} → ${penalty.levelAfter}` +
+      (penalty.stat ? ` · ${PLAYER_STAT_LABELS[penalty.stat]} 감소` : '');
     this.autoSaveProfile(true);
     const deathPosition = { x: this.player.sprite.x, y: this.player.sprite.y };
     this.physics.pause();
     this.audio.stop();
     this.audio.effects.fail.play();
+    this.bossSuccess?.remove(this.player);
     this.player.enterDefeatedState();
     this.weapons.setOwnerActive(false);
     this.hud.enterGameOverState();
@@ -320,6 +352,7 @@ export class GameScene extends Phaser.Scene {
       time: this.progress.gameTime,
       kills: this.progress.killCount,
       level: this.player.stats.level,
+      penalty: penaltyText,
       onRetry: () => this.restartProfile(),
       onMenu: () => this.exitToMenu(),
     });
@@ -361,11 +394,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applySaveState(saveState: GameSaveState): void {
+    const { adaptiveDifficulty, ...progression } = saveState.progression;
     Object.assign(this.progress, {
       gameTime: saveState.gameTime,
       killCount: saveState.killCount,
-      ...saveState.progression,
+      ...progression,
     });
+    Object.assign(this.progress.adaptiveDifficulty, adaptiveDifficulty);
     this.player.applySavedState(saveState.stats, saveState.player);
     this.weapons.applySavedLevels(saveState.weaponLevels);
   }

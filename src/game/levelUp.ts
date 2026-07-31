@@ -1,5 +1,6 @@
 import type { LevelUpChoice, PlayerStats, WeaponDefinitions, WeaponKey } from './types';
 import { MAX_WEAPON_LEVEL } from '../config/constants';
+import { PLAYER_STAT_ICONS } from '../config/statIcons';
 
 export function canUpgradeWeapon(definition: WeaponDefinitions[WeaponKey]): boolean {
   return definition.level < MAX_WEAPON_LEVEL &&
@@ -40,11 +41,11 @@ export function generateLevelUpChoices(
       });
   }
   ([
-    { stat: 'maxHp', name: '+20 최대 체력', desc: '최대 체력 증가', icon: 'healthOrb' },
-    { stat: 'speed', name: '+15 이동속도', desc: '더 빠르게 이동', icon: 'speedIcon' },
-    { stat: 'armor', name: '+2 방어력', desc: '받는 피해 감소', icon: 'armorIcon' },
-    { stat: 'magnet', name: '+30 자석', desc: '더 먼 거리의 경험치 흡수', icon: 'magnet' },
-    { stat: 'recovery', name: '+0.5 회복', desc: '시간에 따라 체력 회복', icon: 'healthOrb' },
+    { stat: 'maxHp', name: '+20 최대 체력', desc: '최대 체력 증가', icon: PLAYER_STAT_ICONS.maxHp },
+    { stat: 'speed', name: '+15 이동속도', desc: '더 빠르게 이동', icon: PLAYER_STAT_ICONS.speed },
+    { stat: 'armor', name: '+2 방어력', desc: '받는 피해 감소', icon: PLAYER_STAT_ICONS.armor },
+    { stat: 'magnet', name: '+30 자석', desc: '더 먼 거리의 경험치 흡수', icon: PLAYER_STAT_ICONS.magnet },
+    { stat: 'recovery', name: '+0.5 회복', desc: '시간에 따라 체력 회복', icon: PLAYER_STAT_ICONS.recovery },
   ] as const).forEach((choice) => choices.push({ type: 'stat', ...choice }));
   Phaser.Utils.Array.Shuffle(choices);
   return choices.slice(0, 3);

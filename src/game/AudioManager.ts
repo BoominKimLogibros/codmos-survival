@@ -14,7 +14,6 @@ export class AudioManager {
       boing: scene.sound.add('boingSfx', { volume: 0.2 }),
       spring: scene.sound.add('springSfx', { volume: 0.2 }),
       bomb: scene.sound.add('bombSfx', { volume: 0.3 }),
-      giggle: scene.sound.add('giggleSfx', { volume: 0.2 }),
       scream: scene.sound.add('screamSfx', { volume: 0.25 }),
       thump: scene.sound.add('thumpSfx', { volume: 0.25 }),
       multiAttack: scene.sound.add('runeMultiAttackSfx', { volume: 0.35 }),

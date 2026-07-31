@@ -19,14 +19,14 @@ await cp(resolve(root, 'pages', 'videos'), videos, { recursive: true });
 
 const assets = {
   'game-icon.png': 'public/assets/codmos-survivors-app-icon.png',
-  'space-bg.png': 'public/assets/a0f3868b-7062-4b81-90aa-08a9d8dea9e2.png',
+  'space-bg.png': 'public/assets/backgrounds/menu-blue.png',
   'avatar-71.png': 'public/assets/profile-thumbnails/71.png',
   'avatar-39.png': 'public/assets/profile-thumbnails/39.png',
   'avatar-52.png': 'public/assets/profile-thumbnails/52.png',
-  'monster-sheet.png': 'public/assets/fc98932d-11bf-4cc5-a5bc-742be86fdf29.png',
-  'item-whip.png': 'public/assets/items/whip.png',
+  'monster-sheet.png': 'public/assets/monsters/cloud-bounce-sheet.png',
+  'item-flag.png': 'public/assets/items/flag.png',
   'item-armor.png': 'public/assets/items/armor-shield.png',
-  'item-rune.png': 'public/assets/items/rune-sign.png',
+  'item-rune.png': 'public/assets/items/rune-item.png',
   'item-xp.png': 'public/assets/items/xp-gem.png',
   'Nunito-Regular.ttf': 'public/fonts/Nunito-Regular.ttf',
   'Nunito-SemiBold.ttf': 'public/fonts/Nunito-SemiBold.ttf',

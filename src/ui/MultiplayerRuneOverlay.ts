@@ -10,6 +10,7 @@ export class MultiplayerRuneOverlay {
   private root: Phaser.GameObjects.Container | null = null;
   private challenge?: RuneChallengePayload;
   private index = 0;
+  private attempt = 0;
   private retryAt = 0;
   private status?: Phaser.GameObjects.Text;
   private iconPanels: ReturnType<typeof createUiPanel>[] = [];
@@ -22,11 +23,17 @@ export class MultiplayerRuneOverlay {
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
   }
 
+  get isOpen(): boolean {
+    return this.root !== null;
+  }
+
   show(challenge: RuneChallengePayload): void {
+    if (this.challenge?.challengeId === challenge.challengeId) return;
     this.destroyPanel();
     this.challenge = challenge;
     this.retryAt = challenge.retryAt;
     this.index = 0;
+    this.attempt = 0;
     const { width } = this.scene.scale.gameSize;
     const panelWidth = Math.min(420, width - 24);
     this.root = this.scene.add.container(width / 2, 132).setScrollFactor(0).setDepth(5200);
@@ -55,7 +62,17 @@ export class MultiplayerRuneOverlay {
     });
   }
 
-  markAccepted(index: number): void {
+  matches(challengeId: string): boolean {
+    return this.challenge?.challengeId === challengeId;
+  }
+
+  markAccepted(index: number, attempt: number): void {
+    if (!this.challenge || attempt < this.attempt || index > this.challenge.sequence.length) return;
+    if (attempt > this.attempt) {
+      this.attempt = attempt;
+      this.index = 0;
+    }
+    if (index <= this.index) return;
     this.index = index;
     this.iconPanels.forEach((panel, itemIndex) => panel.redrawUiPanel({
       fill: itemIndex < index ? UI_COLORS.primary : UI_COLORS.surfaceRaised,
@@ -64,7 +81,10 @@ export class MultiplayerRuneOverlay {
     this.status?.setText(`${index} / ${this.challenge?.sequence.length ?? 0} 입력 완료`);
   }
 
-  retry(retryAt: number): void {
+  retry(retryAt: number, attempt: number): void {
+    if (!this.challenge || attempt < this.attempt) return;
+    if (attempt === this.attempt && retryAt <= this.retryAt) return;
+    this.attempt = attempt;
     this.retryAt = retryAt;
     this.index = 0;
     this.iconPanels.forEach((panel) => panel.redrawUiPanel({ fill: UI_COLORS.panel, border: UI_COLORS.gray }));
@@ -87,8 +107,11 @@ export class MultiplayerRuneOverlay {
     this.status?.setText(`입력 실패 · ${seconds}초 뒤 재시도`);
   }
 
-  complete(challengeId: string): void {
-    if (this.challenge?.challengeId === challengeId) this.destroyPanel();
+  complete(challengeId: string, attempt: number, index: number, cancelled = false): void {
+    if (
+      this.challenge?.challengeId === challengeId &&
+      (cancelled || (attempt >= this.attempt && index === this.challenge.sequence.length))
+    ) this.destroyPanel();
   }
 
   destroy(): void {
@@ -106,6 +129,7 @@ export class MultiplayerRuneOverlay {
     this.root?.destroy(true);
     this.root = null;
     this.challenge = undefined;
+    this.attempt = 0;
     this.status = undefined;
     this.iconPanels = [];
   }

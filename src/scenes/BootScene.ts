@@ -1,11 +1,14 @@
 import {
   ASSETS,
+  BOSS_SPAWN_SPINE_ASSET,
   BOSS_SPINE_ASSETS,
+  EXPLOSION_SPINE_ASSET,
+  MONSTER_PORTAL_SPINE_ASSET,
   RUNE_SPINE_ASSETS,
   SPINE_ASSETS,
 } from '../config/assets';
-import { TILE_SIZE } from '../config/constants';
 import { SKIN_OPTIONS } from '../config/skins';
+import { createFlagSwingEffectTexture } from '../objects/FlagPresentation';
 import { createUiPanel, UI_COLORS, uiTextStyle } from '../ui/theme';
 
 export class BootScene extends Phaser.Scene {
@@ -45,41 +48,11 @@ export class BootScene extends Phaser.Scene {
       percentText.destroy();
     });
 
-    // --- Locally resized 64x64 tile spritesheet ---
-    this.load.spritesheet('survivalTileset', ASSETS.pathfinderTileset, {
-      frameWidth: TILE_SIZE,
-      frameHeight: TILE_SIZE,
-    });
+    this.load.image('fortressArena', ASSETS.fortressArena);
 
-    // --- CDN Images ---
-    // Backgrounds
-    this.load.image('forestAM1', ASSETS.forestAM1);
-    this.load.image('forestAM2', ASSETS.forestAM2);
-    this.load.image('forestAM3', ASSETS.forestAM3);
-    this.load.image('forestAM4', ASSETS.forestAM4);
-    this.load.image('forestPM1', ASSETS.forestPM1);
-    this.load.image('forestPM2', ASSETS.forestPM2);
-    this.load.image('forestPM3', ASSETS.forestPM3);
-    this.load.image('forestPM4', ASSETS.forestPM4);
-    this.load.image('groundAM1', ASSETS.groundAM1);
-    this.load.image('groundAM2', ASSETS.groundAM2);
+    // Menu / lobby backgrounds
     this.load.image('blueBg', ASSETS.blueBg);
-    this.load.image('greenBg', ASSETS.greenBg);
     this.load.image('redBg', ASSETS.redBg);
-
-    // Decorations
-    this.load.image('blueStone', ASSETS.blueStone);
-    this.load.image('greenStone', ASSETS.greenStone);
-    this.load.image('redStone', ASSETS.redStone);
-    this.load.image('bluePillar', ASSETS.bluePillar);
-    this.load.image('greenPillar', ASSETS.greenPillar);
-    this.load.image('redPillar', ASSETS.redPillar);
-    this.load.image('obstacleBottom', ASSETS.obstacleBottom);
-    this.load.image('obstacleMid', ASSETS.obstacleMid);
-    this.load.image('minePile', ASSETS.minePile);
-    this.load.image('nutObstacle', ASSETS.nutObstacle);
-    this.load.image('flag', ASSETS.flag);
-    this.load.image('laserLauncher', ASSETS.laserLauncher);
 
     // Items / Drops
     this.load.image('goldCoin', ASSETS.goldCoin);
@@ -87,17 +60,23 @@ export class BootScene extends Phaser.Scene {
     this.load.image('star', ASSETS.star);
     this.load.image('lightning', ASSETS.lightning);
     this.load.image('dynamite', ASSETS.dynamite);
-    this.load.image('dynamiteIcon', ASSETS.dynamiteIcon);
     this.load.image('orbitOrb', ASSETS.orbitOrb);
     this.load.image('aura', ASSETS.aura);
     this.load.image('xpGem', ASSETS.xpGem);
-    this.load.image('healthOrb', ASSETS.healthHeart);
-    this.load.image('magnet', ASSETS.magnet);
-    this.load.image('speedIcon', ASSETS.speedIcon);
-    this.load.image('armorIcon', ASSETS.armorIcon);
-    this.load.image('whipIcon', ASSETS.whipIcon);
-    this.load.image('rune', ASSETS.runeSign);
+    this.load.image('bossXpReward', ASSETS.bossXpReward);
+    this.load.image('healthPotion', ASSETS.healthPotion);
+    this.load.image('flag', ASSETS.flag);
+    this.load.image('flagAttack', ASSETS.flagAttack);
+    this.load.image('runeItem', ASSETS.runeItem);
+    this.load.image('runeEmbedded', ASSETS.runeEmbedded);
+    this.load.svg('runeAttackActivation', ASSETS.runeAttackActivation);
+    this.load.svg('runeDefenseActivation', ASSETS.runeDefenseActivation);
     this.load.atlas('runeKeyAtlas', ASSETS.runeKeyAtlasImage, ASSETS.runeKeyAtlasJson);
+    this.load.svg('statMaxHpIcon', ASSETS.statMaxHpIcon);
+    this.load.svg('statArmorIcon', ASSETS.statArmorIcon);
+    this.load.svg('statMoveSpeedIcon', ASSETS.statMoveSpeedIcon);
+    this.load.svg('statMagnetIcon', ASSETS.statMagnetIcon);
+    this.load.svg('statRecoveryIcon', ASSETS.statRecoveryIcon);
 
     // Monster spritesheet (CB): 242x1089, each frame 121x121, 2 cols x 9 rows = 18 frames
     this.load.spritesheet('monsterSheet', ASSETS.monsterSheet, {
@@ -105,19 +84,9 @@ export class BootScene extends Phaser.Scene {
       frameHeight: 121,
     });
 
-    // UI
-    this.load.image('gameover', ASSETS.gameover);
-    this.load.image('gaugeBase', ASSETS.gaugeBase);
-    this.load.image('gaugeClear', ASSETS.gaugeClear);
-    this.load.image('gaugeBreak', ASSETS.gaugeBreak);
-    this.load.image('gaugeOver', ASSETS.gaugeOver);
     SKIN_OPTIONS.forEach((skin) => {
       this.load.image(skin.thumbnailKey, skin.thumbnailUrl);
     });
-    for (let i = 0; i <= 9; i++) {
-      const assetKey = `number${i}` as keyof typeof ASSETS;
-      this.load.image(assetKey, ASSETS[assetKey]);
-    }
 
     // Audio
     this.load.audio('coinSfx', ASSETS.coinSfx);
@@ -130,7 +99,6 @@ export class BootScene extends Phaser.Scene {
     this.load.audio('boingSfx', ASSETS.boingSfx);
     this.load.audio('springSfx', ASSETS.springSfx);
     this.load.audio('bombSfx', ASSETS.bombSfx);
-    this.load.audio('giggleSfx', ASSETS.giggleSfx);
     this.load.audio('screamSfx', ASSETS.screamSfx);
     this.load.audio('thumpSfx', ASSETS.thumpSfx);
     this.load.audio('runeMultiAttackSfx', ASSETS.runeMultiAttackSfx);
@@ -143,9 +111,24 @@ export class BootScene extends Phaser.Scene {
     BOSS_SPINE_ASSETS.forEach((boss) => {
       this.load.spine(boss.key, boss.json, boss.atlas);
     });
+    this.load.spine(
+      BOSS_SPAWN_SPINE_ASSET.key,
+      BOSS_SPAWN_SPINE_ASSET.json,
+      BOSS_SPAWN_SPINE_ASSET.atlas,
+    );
+    this.load.spine(
+      MONSTER_PORTAL_SPINE_ASSET.key,
+      MONSTER_PORTAL_SPINE_ASSET.json,
+      MONSTER_PORTAL_SPINE_ASSET.atlas,
+    );
     Object.values(RUNE_SPINE_ASSETS).forEach((effect) => {
       this.load.spine(effect.key, effect.json, effect.atlas);
     });
+    this.load.spine(
+      EXPLOSION_SPINE_ASSET.key,
+      EXPLOSION_SPINE_ASSET.json,
+      EXPLOSION_SPINE_ASSET.atlas,
+    );
   }
 
   create(): void {
@@ -159,43 +142,12 @@ export class BootScene extends Phaser.Scene {
     this._makeTexture('projectile', 8, 8, (g) => {
       g.fillStyle(0x00e5ff, 1); g.fillCircle(4, 4, 4);
     });
-    // Whip slash: curved crescent blade shape (160x80 canvas)
-    this._makeTexture('whipSlash', 160, 80, (g) => {
-      // Build a crescent from thick arcs (no opaque fill cut-out)
-      // Outer glow (wide, soft)
-      g.lineStyle(18, 0xfff176, 0.25);
-      g.beginPath(); g.arc(80, 90, 70, Math.PI + 0.4, 2 * Math.PI - 0.4, false); g.strokePath();
-      // Main slash arc (bright gold, medium width)
-      g.lineStyle(10, 0xffd54f, 0.85);
-      g.beginPath(); g.arc(80, 90, 65, Math.PI + 0.35, 2 * Math.PI - 0.35, false); g.strokePath();
-      // Inner bright highlight (thin white)
-      g.lineStyle(3, 0xffffff, 0.9);
-      g.beginPath(); g.arc(80, 90, 60, Math.PI + 0.4, 2 * Math.PI - 0.4, false); g.strokePath();
-      // Tip sparkle at both ends of the arc
-      const r = 65;
-      const a1 = Math.PI + 0.35, a2 = 2 * Math.PI - 0.35;
-      g.fillStyle(0xffffff, 0.95);
-      g.fillCircle(80 + Math.cos(a1) * r, 90 + Math.sin(a1) * r, 5);
-      g.fillCircle(80 + Math.cos(a2) * r, 90 + Math.sin(a2) * r, 5);
-      g.fillStyle(0xfff176, 0.5);
-      g.fillCircle(80 + Math.cos(a1) * r, 90 + Math.sin(a1) * r, 9);
-      g.fillCircle(80 + Math.cos(a2) * r, 90 + Math.sin(a2) * r, 9);
-      // Extra particle dots along the arc for trail effect
-      for (let t = 0; t < 5; t++) {
-        const a = a1 + (a2 - a1) * (t + 0.5) / 5;
-        g.fillStyle(0xfff9c4, 0.4 + t * 0.1);
-        g.fillCircle(80 + Math.cos(a) * (r + 5), 90 + Math.sin(a) * (r + 5), 2 + Math.random() * 2);
-      }
-    });
     this._makeTexture('bolt', 16, 20, (g) => {
       g.fillStyle(0xffeb3b, 1);
       g.fillTriangle(8, 0, 0, 12, 10, 10);
       g.fillTriangle(6, 8, 16, 8, 8, 20);
     });
-    this._makeTexture('explosionFx', 64, 64, (g) => {
-      g.fillStyle(0xff6e40, 0.6); g.fillCircle(32, 32, 32);
-      g.fillStyle(0xffab40, 0.4); g.fillCircle(32, 32, 20);
-    });
+    createFlagSwingEffectTexture(this);
     this.scene.start('MenuScene');
   }
 

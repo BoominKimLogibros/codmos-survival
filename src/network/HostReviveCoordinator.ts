@@ -1,9 +1,8 @@
 import type { PlayerController } from '../game/PlayerController';
+import { REVIVE_DURATION_MS, REVIVE_RADIUS } from '../game/revive';
+import { DeathMarker } from '../objects/DeathMarker';
 import { ReviveMarker } from '../objects/ReviveMarker';
 import type { NetReviveState } from './gameProtocol';
-
-const REVIVE_DURATION_MS = 10_000;
-const REVIVE_RADIUS = 68;
 
 interface ActiveRevive {
   playerId: string;
@@ -12,7 +11,7 @@ interface ActiveRevive {
   y: number;
   chargeMs: number;
   chargingPlayerId?: string;
-  marker: ReviveMarker;
+  marker?: ReviveMarker;
 }
 
 /** Runs resurrection progress only from positions simulated by the host. */
@@ -32,19 +31,19 @@ export class HostReviveCoordinator {
 
   registerDeath(playerId: string, playerName: string, x: number, y: number): void {
     if (this.active.has(playerId)) return;
+    new DeathMarker(this.scene, x, y);
     this.active.set(playerId, {
       playerId,
       playerName,
       x,
       y,
       chargeMs: 0,
-      marker: new ReviveMarker(this.scene, x, y, playerName),
     });
   }
 
   remove(playerId: string): void {
     const revive = this.active.get(playerId);
-    revive?.marker.destroy();
+    revive?.marker?.destroy();
     this.active.delete(playerId);
   }
 
@@ -55,15 +54,22 @@ export class HostReviveCoordinator {
       if (!reviverId) {
         revive.chargeMs = 0;
         revive.chargingPlayerId = undefined;
-        revive.marker.setProgress(0, false, revive.playerName);
+        revive.marker?.destroy();
+        revive.marker = undefined;
         continue;
       }
       if (revive.chargingPlayerId && revive.chargingPlayerId !== reviverId) {
         revive.chargeMs = 0;
       }
       revive.chargingPlayerId = reviverId;
+      revive.marker ??= new ReviveMarker(
+        this.scene,
+        revive.x,
+        revive.y,
+        revive.playerName,
+      );
       revive.chargeMs = Math.min(REVIVE_DURATION_MS, revive.chargeMs + increment);
-      revive.marker.setProgress(
+      revive.marker?.setProgress(
         revive.chargeMs / REVIVE_DURATION_MS,
         true,
         revive.playerName,
@@ -71,7 +77,7 @@ export class HostReviveCoordinator {
       if (revive.chargeMs < REVIVE_DURATION_MS) continue;
 
       this.active.delete(revive.playerId);
-      revive.marker.destroy();
+      revive.marker?.destroy();
       this.onRevived(revive.playerId, reviverId, { x: revive.x, y: revive.y });
     }
   }
@@ -87,7 +93,7 @@ export class HostReviveCoordinator {
   }
 
   destroy(): void {
-    this.active.forEach((revive) => revive.marker.destroy());
+    this.active.forEach((revive) => revive.marker?.destroy());
     this.active.clear();
   }
 
